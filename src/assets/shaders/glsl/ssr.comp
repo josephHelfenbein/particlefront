@@ -14,73 +14,98 @@ layout(push_constant) uniform PushConstants {
     mat4 invProj;
 } pc;
 
-const int MAX_STEPS = 64;
-const float STEP_SIZE = 0.1;
-const float MAX_DISTANCE = 20.0;
+const int MAX_STEPS = 128;
+const float MAX_DISTANCE = 50.0;
 const float THICKNESS = 0.5;
-const float BINARY_SEARCH_ITERATIONS = 4;
+const int BINARY_SEARCH_ITERATIONS = 8;
 
-vec3 reconstructWorldPosition(vec2 uv, float depth) {
-    vec4 clipSpace = vec4(uv * 2.0 - 1.0, depth, 1.0);
-    vec4 viewSpace = pc.invProj * clipSpace;
-    viewSpace /= viewSpace.w;
-    vec4 worldSpace = pc.invView * viewSpace;
-    return worldSpace.xyz;
+float hash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
 }
+
 vec3 reconstructViewPosition(vec2 uv, float depth) {
     vec4 clipSpace = vec4(uv * 2.0 - 1.0, depth, 1.0);
     vec4 viewSpace = pc.invProj * clipSpace;
     viewSpace /= viewSpace.w;
     return viewSpace.xyz;
 }
-vec3 worldToScreenSpace(vec3 worldPos) {
-    vec4 viewSpace = pc.view * vec4(worldPos, 1.0);
-    vec4 clipSpace = pc.proj * viewSpace;
+
+vec3 viewToScreenSpace(vec3 viewPos) {
+    vec4 clipSpace = pc.proj * vec4(viewPos, 1.0);
     clipSpace.xyz /= clipSpace.w;
     vec3 screenSpace;
     screenSpace.xy = clipSpace.xy * 0.5 + 0.5;
     screenSpace.z = clipSpace.z;
     return screenSpace;
 }
-bool rayMarch(vec3 rayStart, vec3 rayDir, out vec2 hitUV, out float hitDepth) {
-    vec3 currentPos = rayStart;
-    vec3 stepDir = rayDir * STEP_SIZE;
+
+bool rayMarch(vec3 rayStartView, vec3 rayDirView, float jitter, out vec2 hitUV, out float hitDepth, out float rayLength) {
+    vec3 currentPosView = rayStartView;
+    
+    float stepSize = 0.05;
+    vec3 rayDirNorm = normalize(rayDirView);
+    
+    currentPosView += rayDirNorm * stepSize * jitter;
+    
+    vec3 prevPosView = currentPosView;
+    
     for (int i = 0; i < MAX_STEPS; i++) {
-        currentPos += stepDir;
-        float dist = distance(currentPos, rayStart);
+        float dist = length(currentPosView - rayStartView);
         if (dist > MAX_DISTANCE) {
             return false;
         }
-        vec3 screenPos = worldToScreenSpace(currentPos);
+        
+        stepSize = mix(0.05, 0.5, dist / MAX_DISTANCE);
+        vec3 stepDirView = rayDirNorm * stepSize;
+        
+        currentPosView += stepDirView;
+        
+        vec3 screenPos = viewToScreenSpace(currentPosView);
+        
         if (screenPos.x < 0.0 || screenPos.x > 1.0 || 
-            screenPos.y < 0.0 || screenPos.y > 1.0) {
+            screenPos.y < 0.0 || screenPos.y > 1.0 ||
+            screenPos.z < 0.0 || screenPos.z > 1.0) {
             return false;
         }
+        
         float sampledDepth = texture(depthTex, screenPos.xy).r;
         vec3 sampledViewPos = reconstructViewPosition(screenPos.xy, sampledDepth);
-        vec3 currentViewPos = (pc.view * vec4(currentPos, 1.0)).xyz;
-        float depthDiff = currentViewPos.z - sampledViewPos.z;
-        if (depthDiff > 0.0 && depthDiff < THICKNESS) {
-            vec3 binaryStart = currentPos - stepDir;
-            vec3 binaryEnd = currentPos;
+        
+        float depthDiff = sampledViewPos.z - currentPosView.z;
+        
+        float adaptiveThickness = max(THICKNESS, stepSize * 1.5);
+        
+        if (depthDiff > 0.0 && depthDiff < adaptiveThickness) {
+            vec3 binaryStart = prevPosView;
+            vec3 binaryEnd = currentPosView;
+            
             for (int j = 0; j < BINARY_SEARCH_ITERATIONS; j++) {
-                vec3 binaryMid = (binaryStart + binaryEnd) * 0.5;
-                vec3 binaryScreen = worldToScreenSpace(binaryMid);
+                vec3 binaryMid = mix(binaryStart, binaryEnd, 0.5);
+                vec3 binaryScreen = viewToScreenSpace(binaryMid);
+                
                 float binarySampledDepth = texture(depthTex, binaryScreen.xy).r;
                 vec3 binarySampledViewPos = reconstructViewPosition(binaryScreen.xy, binarySampledDepth);
-                vec3 binaryCurrentViewPos = (pc.view * vec4(binaryMid, 1.0)).xyz;
-                if (binaryCurrentViewPos.z > binarySampledViewPos.z) {
-                    binaryEnd = binaryMid;
-                } else {
+                
+                if (binarySampledViewPos.z - binaryMid.z > 0.0) {
                     binaryStart = binaryMid;
+                } else {
+                    binaryEnd = binaryMid;
                 }
             }
-            vec3 finalScreen = worldToScreenSpace((binaryStart + binaryEnd) * 0.5);
+            
+            vec3 finalViewPos = mix(binaryStart, binaryEnd, 0.5);
+            vec3 finalScreen = viewToScreenSpace(finalViewPos);
             hitUV = finalScreen.xy;
             hitDepth = finalScreen.z;
+            rayLength = length(finalViewPos - rayStartView);
             return true;
         }
+        
+        prevPosView = currentPosView;
     }
+    
     return false;
 }
 
@@ -94,29 +119,45 @@ void main() {
     vec2 uv = (vec2(pixel) + 0.5) / vec2(imageSize);
     float depth = texture(depthTex, uv).r;
     vec3 normal = texture(normalTex, uv).xyz * 2.0 - 1.0;
-    if (depth >= 0.9999) {
-        imageStore(outSSR, pixel, vec4(0.0));
-        return;
-    }
-    vec3 worldPos = reconstructWorldPosition(uv, depth);
-    vec3 cameraPos = vec3(pc.invView[3][0], pc.invView[3][1], pc.invView[3][2]);
-    vec3 viewDir = normalize(cameraPos - worldPos);
-    vec3 reflectDir = reflect(-viewDir, normalize(normal));
-    float facingRatio = dot(normal, viewDir);
-    if (facingRatio < 0.1) {
+    
+    vec3 viewPos = reconstructViewPosition(uv, depth);
+    vec3 normalView = (pc.view * vec4(normal, 0.0)).xyz;
+    normalView = normalize(normalView);
+    
+    vec3 viewDir = normalize(-viewPos);
+    vec3 reflectDir = reflect(-viewDir, normalView);
+    
+    if (reflectDir.z > 0.0) {
         imageStore(outSSR, pixel, vec4(0.0));
         return;
     }
     
+    float facingRatio = max(dot(normalView, viewDir), 0.0);
+    if (facingRatio < 0.05) {
+        imageStore(outSSR, pixel, vec4(0.0));
+        return;
+    }
+    
+    float jitter = hash(uv + fract(float(imageSize.x) * 0.001));
+    
     vec2 hitUV;
     float hitDepth;
-    bool hit = rayMarch(worldPos + normal * 0.01, reflectDir, hitUV, hitDepth);
+    float rayLength;
+    bool hit = rayMarch(viewPos, reflectDir, jitter, hitUV, hitDepth, rayLength);
+    
     if (hit) {
-        vec4 reflectionColor = texture(lightingTex, hitUV);
-        vec2 edgeFade = vec2(1.0) - pow(abs(hitUV * 2.0 - 1.0), vec2(8.0));
+        float mipLevel = clamp(rayLength * 0.1, 0.0, 4.0);
+        vec4 reflectionColor = textureLod(lightingTex, hitUV, mipLevel);
+        
+        vec2 edgeFade = smoothstep(0.0, 0.1, hitUV) * smoothstep(1.0, 0.9, hitUV);
         float edgeFactor = min(edgeFade.x, edgeFade.y);
-        float fresnelFactor = pow(1.0 - facingRatio, 2.0);
-        float finalAlpha = reflectionColor.a * edgeFactor * fresnelFactor;
+        
+        float fresnelFactor = pow(1.0 - facingRatio, 3.0);
+        
+        float distanceFade = 1.0 - smoothstep(MAX_DISTANCE * 0.7, MAX_DISTANCE, rayLength);
+        
+        float finalAlpha = reflectionColor.a * edgeFactor * fresnelFactor * distanceFade;
+        
         imageStore(outSSR, pixel, vec4(reflectionColor.rgb, finalAlpha));
     } else {
         imageStore(outSSR, pixel, vec4(0.0));

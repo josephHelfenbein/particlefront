@@ -52,10 +52,11 @@ public:
     void createTextureImageView(VkFormat textureFormat, VkImage textureImage, VkImageView &textureImageView);
     VkImageView createImageView(VkImage image, VkFormat format, uint32_t mipLevels, VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT, VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D, uint32_t layerCount = 1);
     void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
-    void createDescriptorSetLayout(int vertexBitBindings, int fragmentBitBindings, VkDescriptorSetLayout& descriptorSetLayout);
-    void createDescriptorPool(int vertexBitBindings, int fragmentBitBindings, VkDescriptorPool &descriptorPool, int multiplier = 1);
+    void createDescriptorSetLayout(int vertexBitBindings, int fragmentBitBindings, VkDescriptorSetLayout& descriptorSetLayout, VkShaderStageFlags shaderStage = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+    void createDescriptorPool(int vertexBitBindings, int fragmentBitBindings, VkDescriptorPool &descriptorPool, int multiplier = 1, bool isCompute = false);
     std::vector<VkDescriptorSet> createDescriptorSets(VkDescriptorPool pool, VkDescriptorSetLayout& descriptorSetLayout, int vertexBindingCount, int fragmentBindingCount, std::vector<Image*>& textures, std::vector<VkBuffer>& uniformBuffers);
     void createGraphicsPipeline(const std::string& vertexShaderPath, const std::string& fragmentShaderPath, VkPipeline& pipeline, VkPipelineLayout& pipelineLayout, VkDescriptorSetLayout& descriptorSetLayout, VkPushConstantRange* pushConstantRange = nullptr, bool enableDepth = true, bool useTextVertex = false, VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT, VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE, bool depthWrite = true, VkCompareOp depthCompare = VK_COMPARE_OP_LESS, VkRenderPass renderPassOverride = VK_NULL_HANDLE, uint32_t colorAttachmentCount = 1, VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT, bool noVertexInput = false);
+    void createComputePipeline(const std::string& computeShaderPath, VkPipeline& pipeline, VkPipelineLayout& pipelineLayout, VkDescriptorSetLayout& descriptorSetLayout, VkPushConstantRange* pushConstantRange = nullptr);
     void createCommandBuffers();
     void createSyncObjects();
     void setUIMode(bool enabled);
@@ -97,7 +98,6 @@ private:
     void createLightingRenderPass();
     void createLightingFramebuffers();
     void createSSRResources();
-    void createSSRComputePipeline();
     void createCompositeRenderPass();
     void createCompositeFramebuffers();
     void createDeferredDescriptorSets();
@@ -164,10 +164,6 @@ private:
     VkImage ssrImage{};
     VkDeviceMemory ssrMemory{};
     VkImageView ssrView{};
-    VkPipeline ssrComputePipeline{};
-    VkPipelineLayout ssrPipelineLayout{};
-    VkDescriptorSetLayout ssrDescriptorSetLayout{};
-    VkDescriptorPool ssrDescriptorPool{};
     std::vector<VkDescriptorSet> ssrDescriptorSets{};
     std::vector<VkDescriptorSet> lightingDescriptorSets{};
     std::vector<VkDescriptorSet> compositeDescriptorSets{};

@@ -22,6 +22,19 @@ struct Shader {
     int fragmentBitBindings = 4;
 };
 
+struct ComputeShader {
+    std::string name;
+    std::string computePath;
+    VkPipeline pipeline{};
+    VkPipelineLayout pipelineLayout{};
+    VkDescriptorSetLayout descriptorSetLayout{};
+    VkDescriptorPool descriptorPool{};
+    VkPushConstantRange pushConstantRange{};
+    int poolMultiplier = 1;
+    int computeBitBindings = 1;
+    int storageImageCount = 1;
+};
+
 struct alignas(16) UIPushConstants {
     glm::vec3 color;
     uint32_t isUI;
@@ -52,15 +65,18 @@ struct alignas(16) SSRPushConstants {
 
 class ShaderManager {
 private:
-    std::unordered_map<std::string, Shader> shaders;
+    std::unordered_map<std::string, std::variant<Shader, ComputeShader>> shaders;
     Renderer* renderer;
 
 public:
-    ShaderManager(std::vector<Shader*>& shaders);
+    ShaderManager(std::vector<std::variant<Shader*, ComputeShader*>>& shaders);
     ~ShaderManager();
 
     Shader* getShader(const std::string& name);
+    ComputeShader* getComputeShader(const std::string& name);
+
     void loadShader(const std::string& name, const std::string& vertexPath, const std::string& fragmentPath, int vertexBitBindings, int fragmentBitBindings, VkPushConstantRange pushConstantRange = {}, int poolMultiplier = 1);
+    void loadShader(const std::string& name, const std::string& computePath, int computeBitBindings, int storageImageCount, VkPushConstantRange pushConstantRange = {}, int poolMultiplier = 1);
     void shutdown();
 
     static ShaderManager* getInstance();

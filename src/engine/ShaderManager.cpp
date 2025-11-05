@@ -1,17 +1,32 @@
 #include <ShaderManager.h>
 #include <Renderer.h>
 
-ShaderManager::ShaderManager(std::vector<Shader*>& shaders) {
+ShaderManager::ShaderManager(std::vector<std::variant<Shader*, ComputeShader*>>& shaders) {
     renderer = Renderer::getInstance();
     for (auto& shader : shaders) {
-        loadShader(shader->name, shader->vertexPath, shader->fragmentPath, shader->vertexBitBindings, shader->fragmentBitBindings, shader->pushConstantRange, shader->poolMultiplier);
+        if (std::holds_alternative<Shader*>(shader)) {
+            Shader* s = std::get<Shader*>(shader);
+            loadShader(s->name, s->vertexPath, s->fragmentPath, s->vertexBitBindings, s->fragmentBitBindings, s->pushConstantRange, s->poolMultiplier);
+        } else if (std::holds_alternative<ComputeShader*>(shader)) {
+            ComputeShader* cs = std::get<ComputeShader*>(shader);
+            loadShader(cs->name, cs->computePath, cs->computeBitBindings, cs->storageImageCount, cs->pushConstantRange, cs->poolMultiplier);
+        }
     }
 }
 ShaderManager::~ShaderManager() {
     shutdown();
 }
 Shader* ShaderManager::getShader(const std::string& name) {
-    return &shaders[name];
+    if (shaders.find(name) == shaders.end() || !std::holds_alternative<Shader>(shaders[name])) {
+        return nullptr;
+    }
+    return &std::get<Shader>(shaders[name]);
+}
+ComputeShader* ShaderManager::getComputeShader(const std::string& name) {
+    if (shaders.find(name) == shaders.end() || !std::holds_alternative<ComputeShader>(shaders[name])) {
+        return nullptr;
+    }
+    return &std::get<ComputeShader>(shaders[name]);
 }
 void ShaderManager::shutdown() {
     if (!renderer || renderer->device == VK_NULL_HANDLE) {
@@ -19,21 +34,42 @@ void ShaderManager::shutdown() {
         return;
     }
     for (auto& [name, shader] : shaders) {
-        if (shader.pipeline) {
-            vkDestroyPipeline(renderer->device, shader.pipeline, nullptr);
-            shader.pipeline = VK_NULL_HANDLE;
-        }
-        if (shader.pipelineLayout) {
-            vkDestroyPipelineLayout(renderer->device, shader.pipelineLayout, nullptr);
-            shader.pipelineLayout = VK_NULL_HANDLE;
-        }
-        if (shader.descriptorSetLayout) {
-            vkDestroyDescriptorSetLayout(renderer->device, shader.descriptorSetLayout, nullptr);
-            shader.descriptorSetLayout = VK_NULL_HANDLE;
-        }
-        if (shader.descriptorPool) {
-            vkDestroyDescriptorPool(renderer->device, shader.descriptorPool, nullptr);
-            shader.descriptorPool = VK_NULL_HANDLE;
+        if (std::holds_alternative<Shader>(shader)) {
+            auto& s = std::get<Shader>(shader);
+            if (s.pipeline) {
+                vkDestroyPipeline(renderer->device, s.pipeline, nullptr);
+                s.pipeline = VK_NULL_HANDLE;
+            }
+            if (s.pipelineLayout) {
+                vkDestroyPipelineLayout(renderer->device, s.pipelineLayout, nullptr);
+                s.pipelineLayout = VK_NULL_HANDLE;
+            }
+            if (s.descriptorSetLayout) {
+                vkDestroyDescriptorSetLayout(renderer->device, s.descriptorSetLayout, nullptr);
+                s.descriptorSetLayout = VK_NULL_HANDLE;
+            }
+            if (s.descriptorPool) {
+                vkDestroyDescriptorPool(renderer->device, s.descriptorPool, nullptr);
+                s.descriptorPool = VK_NULL_HANDLE;
+            }
+        } else if (std::holds_alternative<ComputeShader>(shader)) {
+            auto& cs = std::get<ComputeShader>(shader);
+            if (cs.pipeline) {
+                vkDestroyPipeline(renderer->device, cs.pipeline, nullptr);
+                cs.pipeline = VK_NULL_HANDLE;
+            }
+            if (cs.pipelineLayout) {
+                vkDestroyPipelineLayout(renderer->device, cs.pipelineLayout, nullptr);
+                cs.pipelineLayout = VK_NULL_HANDLE;
+            }
+            if (cs.descriptorSetLayout) {
+                vkDestroyDescriptorSetLayout(renderer->device, cs.descriptorSetLayout, nullptr);
+                cs.descriptorSetLayout = VK_NULL_HANDLE;
+            }
+            if (cs.descriptorPool) {
+                vkDestroyDescriptorPool(renderer->device, cs.descriptorPool, nullptr);
+                cs.descriptorPool = VK_NULL_HANDLE;
+            }
         }
     }
     shaders.clear();
@@ -86,8 +122,25 @@ void ShaderManager::loadShader(const std::string& name, const std::string& verte
     renderer->createDescriptorPool(shader.vertexBitBindings, shader.fragmentBitBindings, shader.descriptorPool, shader.poolMultiplier);
     shaders[name] = shader;
 }
+void ShaderManager::loadShader(const std::string& name, const std::string& computePath, int computeBitBindings, int storageImageCount, VkPushConstantRange pushConstantRange, int poolMultiplier) {
+    ComputeShader computeShader = {
+        .name = name,
+        .computePath = computePath,
+        .pushConstantRange = pushConstantRange,
+        .poolMultiplier = poolMultiplier,
+        .computeBitBindings = computeBitBindings,
+    };
+
+    int samplerCount = computeBitBindings - storageImageCount;
+    
+    renderer->createDescriptorSetLayout(storageImageCount, samplerCount, computeShader.descriptorSetLayout, VK_SHADER_STAGE_COMPUTE_BIT);
+    VkPushConstantRange* pPCR = (computeShader.pushConstantRange.size > 0) ? &computeShader.pushConstantRange : nullptr;
+    renderer->createComputePipeline(computeShader.computePath, computeShader.pipeline, computeShader.pipelineLayout, computeShader.descriptorSetLayout, pPCR);
+    renderer->createDescriptorPool(storageImageCount, samplerCount, computeShader.descriptorPool, computeShader.poolMultiplier, true);
+    shaders[name] = computeShader;
+}
 ShaderManager* ShaderManager::getInstance() {
-    static std::vector<Shader*> defaultShaders = {
+    static std::vector<std::variant<Shader*, ComputeShader*>> defaultShaders = {
         new Shader{
             .name = "gbuffer",
             .vertexPath = "src/assets/shaders/compiled/gbuffer.vert.spv",
@@ -148,6 +201,18 @@ ShaderManager* ShaderManager::getInstance() {
             .poolMultiplier = 64,
             .vertexBitBindings = 1,
             .fragmentBitBindings = 1,
+        },
+        new ComputeShader{
+            .name = "ssr",
+            .computePath = "src/assets/shaders/compiled/ssr.comp.spv",
+            .pushConstantRange = {
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+                .offset = 0,
+                .size = sizeof(SSRPushConstants),
+            },
+            .poolMultiplier = 4,
+            .computeBitBindings = 4,
+            .storageImageCount = 1,
         },
     };
     static ShaderManager instance(defaultShaders);

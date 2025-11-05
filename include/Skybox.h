@@ -23,7 +23,7 @@
 
 class Skybox : public Entity {
 public:
-    Skybox() : Entity("skybox", "skybox", {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, glm::vec3(200.0f), ensureCubemapTexture()) {
+    Skybox() : Entity("skybox", "skybox", {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, glm::vec3(100.0f), ensureCubemapTexture()) {
         this->setModel(ModelManager::getInstance()->getModel("cube"));
     }
     void update(float deltaTime) override;

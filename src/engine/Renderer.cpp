@@ -241,6 +241,37 @@ struct TextVertex{
         }
         return shaderModule;
     }
+    void Renderer::createComputePipeline(const std::string& computeShaderPath, VkPipeline& pipeline, VkPipelineLayout& pipelineLayout, VkDescriptorSetLayout& descriptorSetLayout, VkPushConstantRange* pushConstantRange) {
+        std::vector<char> compShaderCode = readFile(computeShaderPath);
+        VkShaderModule computeShader = createShaderModule(compShaderCode);
+        VkPipelineShaderStageCreateInfo compShaderStageInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+            .module = computeShader,
+            .pName = "main",
+        };
+        VkPipelineShaderStageCreateInfo shaderStages[] = {compShaderStageInfo};
+        const uint32_t shaderStageCount = 1u;
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 1u,
+            .pSetLayouts = &descriptorSetLayout,
+            .pushConstantRangeCount = pushConstantRange ? 1u : 0u,
+            .pPushConstantRanges = pushConstantRange,
+        };
+        if(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create compute pipeline layout!");
+        }
+        VkComputePipelineCreateInfo pipelineInfo = {
+            .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            .stage = shaderStages[0],
+            .layout = pipelineLayout,
+        };
+        if(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create compute pipeline!");
+        }
+        vkDestroyShaderModule(device, computeShader, nullptr);
+    }
     void Renderer::createGraphicsPipeline(const std::string& vertexShaderPath, const std::string& fragmentShaderPath, VkPipeline& pipeline, VkPipelineLayout& pipelineLayout, VkDescriptorSetLayout& descriptorSetLayout, VkPushConstantRange* pushConstantRange, bool enableDepth, bool useTextVertex, VkCullModeFlags cullMode, VkFrontFace frontFace, bool depthWrite, VkCompareOp depthCompare, VkRenderPass renderPassOverride, uint32_t colorAttachmentCount, VkSampleCountFlagBits sampleCount, bool noVertexInput) {
         std::vector<char> vertShaderCode = readFile(vertexShaderPath);
         std::vector<char> fragShaderCode = readFile(fragmentShaderPath);
@@ -409,17 +440,20 @@ struct TextVertex{
         vkDestroyShaderModule(device, fragmentShader, nullptr);
         vkDestroyShaderModule(device, vertexShader, nullptr);
     }
-    void Renderer::createDescriptorSetLayout(int vertexBitBindings, int fragmentBitBindings, VkDescriptorSetLayout& descriptorSetLayout) {
+    void Renderer::createDescriptorSetLayout(int vertexBitBindings, int fragmentBitBindings, VkDescriptorSetLayout& descriptorSetLayout, VkShaderStageFlags shaderStage) {
         const int totalVertexBindings = std::max(vertexBitBindings, 0);
         const int totalFragmentBindings = std::max(fragmentBitBindings, 0);
         std::vector<VkDescriptorSetLayoutBinding> bindings;
         bindings.reserve(static_cast<size_t>(totalVertexBindings + totalFragmentBindings));
+        
+        bool isCompute = (shaderStage & VK_SHADER_STAGE_COMPUTE_BIT) != 0;
+        
         for (int bindingIndex = 0; bindingIndex < totalVertexBindings; ++bindingIndex) {
             VkDescriptorSetLayoutBinding vertexLayoutBinding = {
                 .binding = static_cast<uint32_t>(bindingIndex),
-                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorType = isCompute ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                 .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+                .stageFlags = isCompute ? VK_SHADER_STAGE_COMPUTE_BIT : VK_SHADER_STAGE_VERTEX_BIT,
                 .pImmutableSamplers = nullptr,
             };
             bindings.push_back(vertexLayoutBinding);
@@ -429,7 +463,7 @@ struct TextVertex{
                 .binding = static_cast<uint32_t>(totalVertexBindings + offset),
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .stageFlags = isCompute ? VK_SHADER_STAGE_COMPUTE_BIT : VK_SHADER_STAGE_FRAGMENT_BIT,
                 .pImmutableSamplers = nullptr,
             };
             bindings.push_back(fragmentLayoutBinding);
@@ -443,11 +477,11 @@ struct TextVertex{
             throw std::runtime_error("failed to create descriptor set layout!");
         }
     }
-    void Renderer::createDescriptorPool(int vertexBitBindings, int fragmentBitBindings, VkDescriptorPool &descriptorPool, int multiplier) {
+    void Renderer::createDescriptorPool(int vertexBitBindings, int fragmentBitBindings, VkDescriptorPool &descriptorPool, int multiplier, bool isCompute) {
         std::vector<VkDescriptorPoolSize> poolSizes;
         if (vertexBitBindings > 0) {
             VkDescriptorPoolSize vertexPoolSize = {
-                .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .type = isCompute ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                 .descriptorCount = static_cast<uint32_t>(vertexBitBindings * MAX_FRAMES_IN_FLIGHT * multiplier),
             };
             poolSizes.push_back(vertexPoolSize);
@@ -825,22 +859,6 @@ struct TextVertex{
             vkDestroyRenderPass(device, compositeRenderPass, nullptr);
             compositeRenderPass = VK_NULL_HANDLE;
         }
-        if (ssrComputePipeline) {
-            vkDestroyPipeline(device, ssrComputePipeline, nullptr);
-            ssrComputePipeline = VK_NULL_HANDLE;
-        }
-        if (ssrPipelineLayout) {
-            vkDestroyPipelineLayout(device, ssrPipelineLayout, nullptr);
-            ssrPipelineLayout = VK_NULL_HANDLE;
-        }
-        if (ssrDescriptorSetLayout) {
-            vkDestroyDescriptorSetLayout(device, ssrDescriptorSetLayout, nullptr);
-            ssrDescriptorSetLayout = VK_NULL_HANDLE;
-        }
-        if (ssrDescriptorPool) {
-            vkDestroyDescriptorPool(device, ssrDescriptorPool, nullptr);
-            ssrDescriptorPool = VK_NULL_HANDLE;
-        }
         if (gBufferSampler) {
             vkDestroySampler(device, gBufferSampler, nullptr);
             gBufferSampler = VK_NULL_HANDLE;
@@ -931,7 +949,6 @@ struct TextVertex{
         createCompositeFramebuffers();
         createCommandPool();
         createSSRResources();
-        createSSRComputePipeline();
         createTextureSampler();
         createGBufferSampler();
         shaderManager = ShaderManager::getInstance();
@@ -1529,94 +1546,6 @@ void Renderer::createInstance() {
         transitionImageLayout(ssrImage, VK_FORMAT_R16G16B16A16_SFLOAT, 
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
     }
-    void Renderer::createSSRComputePipeline() {
-        auto computeShaderCode = readFile("src/assets/shaders/compiled/ssr.comp.spv");
-        VkShaderModule computeShaderModule = createShaderModule(computeShaderCode);
-        
-        VkPipelineShaderStageCreateInfo computeShaderStageInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-            .module = computeShaderModule,
-            .pName = "main",
-        };
-        std::array<VkDescriptorSetLayoutBinding, 4> bindings = {{
-            {
-                .binding = 0,
-                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-            },
-            {
-                .binding = 1,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-            },
-            {
-                .binding = 2,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-            },
-            {
-                .binding = 3,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-            },
-        }};
-        VkDescriptorSetLayoutCreateInfo layoutInfo = {
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .bindingCount = static_cast<uint32_t>(bindings.size()),
-            .pBindings = bindings.data(),
-        };
-        if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &ssrDescriptorSetLayout) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create SSR descriptor set layout!");
-        }
-        VkPushConstantRange pushConstantRange = {
-            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-            .offset = 0,
-            .size = sizeof(SSRPushConstants),
-        };
-        VkPipelineLayoutCreateInfo pipelineLayoutInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 1,
-            .pSetLayouts = &ssrDescriptorSetLayout,
-            .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &pushConstantRange,
-        };
-        if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &ssrPipelineLayout) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create SSR pipeline layout!");
-        }
-        VkComputePipelineCreateInfo pipelineInfo = {
-            .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-            .stage = computeShaderStageInfo,
-            .layout = ssrPipelineLayout,
-        };
-        if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &ssrComputePipeline) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create SSR compute pipeline!");
-        }
-        vkDestroyShaderModule(device, computeShaderModule, nullptr);
-        std::array<VkDescriptorPoolSize, 2> poolSizes = {{
-            {
-                .type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                .descriptorCount = MAX_FRAMES_IN_FLIGHT,
-            },
-            {
-                .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = MAX_FRAMES_IN_FLIGHT * 3,
-            },
-        }};
-        VkDescriptorPoolCreateInfo poolInfo = {
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .maxSets = MAX_FRAMES_IN_FLIGHT,
-            .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
-            .pPoolSizes = poolSizes.data(),
-        };
-        if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &ssrDescriptorPool) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create SSR descriptor pool!");
-        }
-    }
     void Renderer::createCompositeRenderPass() {
         VkAttachmentDescription colorAttachment = {
             .format = swapChainImageFormat,
@@ -1809,10 +1738,14 @@ void Renderer::createInstance() {
             
             vkUpdateDescriptorSets(device, 2, descriptorWrites.data(), 0, nullptr);
         }
-        std::vector<VkDescriptorSetLayout> ssrLayouts(MAX_FRAMES_IN_FLIGHT, ssrDescriptorSetLayout);
+        ComputeShader* ssrShader = shaderManager->getComputeShader("ssr");
+        if (!ssrShader) {
+            throw std::runtime_error("Failed to get SSR compute shader for descriptor set creation!");
+        }
+        std::vector<VkDescriptorSetLayout> ssrLayouts(MAX_FRAMES_IN_FLIGHT, ssrShader->descriptorSetLayout);
         VkDescriptorSetAllocateInfo ssrAllocInfo = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .descriptorPool = ssrDescriptorPool,
+            .descriptorPool = ssrShader->descriptorPool,
             .descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT),
             .pSetLayouts = ssrLayouts.data(),
         };
@@ -1889,6 +1822,7 @@ void Renderer::createInstance() {
     void Renderer::recreateDeferredDescriptorSets() {
         Shader* lightingShader = shaderManager->getShader("lighting");
         Shader* compositeShader = shaderManager->getShader("composite");
+        ComputeShader* ssrShader = shaderManager->getComputeShader("ssr");
         
         if (lightingShader && lightingShader->descriptorPool != VK_NULL_HANDLE) {
             vkResetDescriptorPool(device, lightingShader->descriptorPool, 0);
@@ -1896,8 +1830,8 @@ void Renderer::createInstance() {
         if (compositeShader && compositeShader->descriptorPool != VK_NULL_HANDLE) {
             vkResetDescriptorPool(device, compositeShader->descriptorPool, 0);
         }
-        if (ssrDescriptorPool != VK_NULL_HANDLE) {
-            vkResetDescriptorPool(device, ssrDescriptorPool, 0);
+        if (ssrShader && ssrShader->descriptorPool != VK_NULL_HANDLE) {
+            vkResetDescriptorPool(device, ssrShader->descriptorPool, 0);
         }
         
         lightingDescriptorSets.clear();
@@ -2046,7 +1980,7 @@ void Renderer::createInstance() {
             UniformBufferObject ubo{};
             ubo.model = modelMatrix;
             ubo.view = view;
-            ubo.proj = glm::perspective(glm::radians(cameraFOV), static_cast<float>(swapChainExtent.width) / std::max(static_cast<float>(swapChainExtent.height), 1.0f), 0.1f, 500.0f);
+            ubo.proj = glm::perspective(glm::radians(cameraFOV), static_cast<float>(swapChainExtent.width) / std::max(static_cast<float>(swapChainExtent.height), 1.0f), 0.1f, 200.0f);
             ubo.proj[1][1] *= -1;
             ubo.cameraPos = cameraPos;
             entity->updateUniformBuffer(currentFrame, ubo);
@@ -2167,7 +2101,7 @@ void Renderer::createInstance() {
             cameraFOV = activeCamera->getFOV();
             float aspectRatio = static_cast<float>(swapChainExtent.width) / std::max(static_cast<float>(swapChainExtent.height), 1.0f);
             invView = cameraWorld;
-            glm::mat4 proj = glm::perspective(glm::radians(cameraFOV), aspectRatio, 0.1f, 500.0f);
+            glm::mat4 proj = glm::perspective(glm::radians(cameraFOV), aspectRatio, 0.1f, 200.0f);
             proj[1][1] *= -1;
             invProj = glm::inverse(proj);
         }
@@ -2421,9 +2355,10 @@ void Renderer::createInstance() {
             vkCmdEndRenderPass(commandBuffer);
         }
         {
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ssrComputePipeline);
+            ComputeShader* ssrShader = shaderManager->getComputeShader("ssr");
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ssrShader->pipeline);
 
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ssrPipelineLayout, 0, 1, &ssrDescriptorSets[currentFrame], 0, nullptr);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ssrShader->pipelineLayout, 0, 1, &ssrDescriptorSets[currentFrame], 0, nullptr);
 
             SSRPushConstants ssrPushConstants{};
             if (activeCamera) {
@@ -2431,12 +2366,12 @@ void Renderer::createInstance() {
                 ssrPushConstants.view = glm::inverse(cameraWorld);
                 ssrPushConstants.proj = glm::perspective(glm::radians(activeCamera->getFOV()), 
                     static_cast<float>(swapChainExtent.width) / std::max(static_cast<float>(swapChainExtent.height), 1.0f), 
-                    0.1f, 500.0f);
+                    0.1f, 200.0f);
                 ssrPushConstants.proj[1][1] *= -1;
                 ssrPushConstants.invView = cameraWorld;
                 ssrPushConstants.invProj = glm::inverse(ssrPushConstants.proj);
             }
-            vkCmdPushConstants(commandBuffer, ssrPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(SSRPushConstants), &ssrPushConstants);
+            vkCmdPushConstants(commandBuffer, ssrShader->pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(SSRPushConstants), &ssrPushConstants);
 
             uint32_t groupX = (swapChainExtent.width + 7) / 8;
             uint32_t groupY = (swapChainExtent.height + 7) / 8;
