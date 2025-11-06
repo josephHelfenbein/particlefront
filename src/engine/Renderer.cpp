@@ -42,6 +42,7 @@
 #include <ButtonObject.h>
 #include <Camera.h>
 #include <Frustrum.h>
+#include <Light.h>
 #include <utils.h>
 
 const uint32_t WIDTH = 800;
@@ -448,12 +449,15 @@ struct TextVertex{
         
         bool isCompute = (shaderStage & VK_SHADER_STAGE_COMPUTE_BIT) != 0;
         
+        VkShaderStageFlags uboStageFlags = isCompute ? VK_SHADER_STAGE_COMPUTE_BIT : 
+                                                       (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+        
         for (int bindingIndex = 0; bindingIndex < totalVertexBindings; ++bindingIndex) {
             VkDescriptorSetLayoutBinding vertexLayoutBinding = {
                 .binding = static_cast<uint32_t>(bindingIndex),
                 .descriptorType = isCompute ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                 .descriptorCount = 1,
-                .stageFlags = isCompute ? VK_SHADER_STAGE_COMPUTE_BIT : VK_SHADER_STAGE_VERTEX_BIT,
+                .stageFlags = uboStageFlags,
                 .pImmutableSamplers = nullptr,
             };
             bindings.push_back(vertexLayoutBinding);
@@ -1281,6 +1285,16 @@ void Renderer::createInstance() {
         if (ssrView) vkDestroyImageView(device, ssrView, nullptr);
         if (ssrImage) vkDestroyImage(device, ssrImage, nullptr);
         if (ssrMemory) vkFreeMemory(device, ssrMemory, nullptr);
+        for (size_t i = 0; i < lightsUniformBuffers.size(); i++) {
+            if (lightsUniformBuffers[i]) {
+                vkDestroyBuffer(device, lightsUniformBuffers[i], nullptr);
+            }
+            if (lightsUniformBuffersMemory[i]) {
+                vkFreeMemory(device, lightsUniformBuffersMemory[i], nullptr);
+            }
+        }
+        lightsUniformBuffers.clear();
+        lightsUniformBuffersMemory.clear();
         for (auto framebuffer : swapChainFramebuffers) {
             vkDestroyFramebuffer(device, framebuffer, nullptr);
         }
@@ -1614,6 +1628,27 @@ void Renderer::createInstance() {
         if (!lightingShader || !compositeShader) {
             throw std::runtime_error("Failed to get lighting or composite shader for descriptor set creation!");
         }
+        
+        VkDeviceSize bufferSize = sizeof(LightsBuffer);
+        lightsUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+        lightsUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+        
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                lightsUniformBuffers[i], lightsUniformBuffersMemory[i]);
+        }
+        LightsBuffer lightBufferData = {
+            .lights = {},
+            .numLights = 0,
+        };
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            void* data;
+            vkMapMemory(device, lightsUniformBuffersMemory[i], 0, bufferSize, 0, &data);
+            memcpy(data, &lightBufferData, bufferSize);
+            vkUnmapMemory(device, lightsUniformBuffersMemory[i]);
+        }
+        
         std::vector<VkDescriptorSetLayout> lightingLayouts(MAX_FRAMES_IN_FLIGHT, lightingShader->descriptorSetLayout);
         VkDescriptorSetAllocateInfo allocInfo = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -1625,7 +1660,13 @@ void Renderer::createInstance() {
         if (vkAllocateDescriptorSets(device, &allocInfo, lightingDescriptorSets.data()) != VK_SUCCESS) {
             throw std::runtime_error("Failed to allocate lighting descriptor sets!");
         }
+        
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            VkDescriptorBufferInfo bufferInfo = {
+                .buffer = lightsUniformBuffers[i],
+                .offset = 0,
+                .range = bufferSize,
+            };
             std::array<VkDescriptorImageInfo, 4> imageInfos = {{
                 {
                     .sampler = gBufferSampler,
@@ -1646,17 +1687,18 @@ void Renderer::createInstance() {
                     .sampler = gBufferSampler,
                     .imageView = gBufferDepthView,
                     .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                },
+                }
             }};
-            std::array<VkWriteDescriptorSet, 4> descriptorWrites = {{
+            
+            std::array<VkWriteDescriptorSet, 5> descriptorWrites = {{
                 {
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                     .dstSet = lightingDescriptorSets[i],
                     .dstBinding = 0,
                     .dstArrayElement = 0,
                     .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &imageInfos[0],
+                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .pBufferInfo = &bufferInfo,
                 },
                 {
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -1665,7 +1707,7 @@ void Renderer::createInstance() {
                     .dstArrayElement = 0,
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &imageInfos[1],
+                    .pImageInfo = &imageInfos[0],
                 },
                 {
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -1674,7 +1716,7 @@ void Renderer::createInstance() {
                     .dstArrayElement = 0,
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &imageInfos[2],
+                    .pImageInfo = &imageInfos[1],
                 },
                 {
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -1683,10 +1725,19 @@ void Renderer::createInstance() {
                     .dstArrayElement = 0,
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .pImageInfo = &imageInfos[2],
+                },
+                {
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = lightingDescriptorSets[i],
+                    .dstBinding = 4,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                     .pImageInfo = &imageInfos[3],
                 },
             }};
-            vkUpdateDescriptorSets(device, 4, descriptorWrites.data(), 0, nullptr);
+            vkUpdateDescriptorSets(device, 5, descriptorWrites.data(), 0, nullptr);
         }
         std::vector<VkDescriptorSetLayout> compositeLayouts(MAX_FRAMES_IN_FLIGHT, compositeShader->descriptorSetLayout);
         VkDescriptorSetAllocateInfo compositeAllocInfo = {
@@ -1819,6 +1870,39 @@ void Renderer::createInstance() {
             vkUpdateDescriptorSets(device, 4, descriptorWrites.data(), 0, nullptr);
         }
     }
+    void Renderer::updateLightsUniformBuffer() {
+        PointLight* pointLights = (PointLight*)malloc(sizeof(PointLight) * 64);
+        std::map<std::string, Entity*>& entities = entityManager->getAllEntities();
+        int lightCount = 0;
+        auto traverse = [&](auto&& self, Entity* entity) -> void {
+            if (entity->isActive()) {
+                if (auto* light = dynamic_cast<Light*>(entity)) {
+                    if (lightCount < 64) {
+                        pointLights[lightCount++] = light->getPointLightData();
+                    }
+                }
+            }
+            for (Entity* child : entity->getChildren()) {
+                self(self, child);
+            }
+        };
+        for (auto& [name, entity] : entities) {
+            if (entity->isActive() && entity->getParent() == nullptr) {
+                traverse(traverse, entity);
+            }
+        }
+        
+        LightsBuffer lightBufferData;
+        std::memcpy(lightBufferData.lights, pointLights, sizeof(PointLight) * lightCount);
+        lightBufferData.numLights = static_cast<uint32_t>(lightCount);
+        free(pointLights);
+        
+        VkDeviceSize bufferSize = sizeof(LightsBuffer);
+        void* data;
+        vkMapMemory(device, lightsUniformBuffersMemory[currentFrame], 0, bufferSize, 0, &data);
+        memcpy(data, &lightBufferData, bufferSize);
+        vkUnmapMemory(device, lightsUniformBuffersMemory[currentFrame]);
+    }
     void Renderer::recreateDeferredDescriptorSets() {
         Shader* lightingShader = shaderManager->getShader("lighting");
         Shader* compositeShader = shaderManager->getShader("composite");
@@ -1938,7 +2022,7 @@ void Renderer::createInstance() {
             cameraPos = glm::vec3(worldPos);
             cameraFOV = activeCamera->getFOV();
             float aspectRatio = static_cast<float>(swapChainExtent.width) / std::max(static_cast<float>(swapChainExtent.height), 1.0f);
-            frustrum = activeCamera->getFrustrum(aspectRatio, 0.1f, 100.0f, cameraWorld);
+            frustrum = activeCamera->getFrustrum(aspectRatio, 0.1f, 200.0f, cameraWorld);
             view = glm::inverse(cameraWorld);
         }
         auto renderEntity = [&](Entity* entity) -> bool {
@@ -2351,6 +2435,7 @@ void Renderer::createInstance() {
             };
             
             vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+            updateLightsUniformBuffer();
             renderDeferredLighting(commandBuffer);
             vkCmdEndRenderPass(commandBuffer);
         }

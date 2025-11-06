@@ -164,7 +164,7 @@ ShaderManager* ShaderManager::getInstance() {
                 .size = sizeof(LightingPushConstants),
             },
             .poolMultiplier = 4,
-            .vertexBitBindings = 0,
+            .vertexBitBindings = 1,
             .fragmentBitBindings = 4,
         },
         new Shader{

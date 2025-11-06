@@ -50,6 +50,18 @@ struct alignas(16) UniformBufferObject {
     float padding;
 };
 
+struct alignas(16) PointLight {
+    alignas(16) glm::vec3 position;
+    alignas(4) float radius;
+    alignas(16) glm::vec3 color;
+    alignas(4) float intensity;
+};
+
+struct alignas(16) LightsBuffer {
+    PointLight lights[64];
+    uint32_t numLights;
+};
+
 struct alignas(16) LightingPushConstants {
     glm::mat4 invView;
     glm::mat4 invProj;

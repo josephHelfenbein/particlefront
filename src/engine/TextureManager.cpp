@@ -68,7 +68,7 @@ void TextureManager::prepareTextureAtlas() {
 #endif
     for (int i = 0; i < static_cast<int>(textureAtlas.size()); ++i) {
         auto it = std::next(textureAtlas.begin(), i);
-        stbi_set_flip_vertically_on_load(true);
+        stbi_set_flip_vertically_on_load(false);
         int texWidth, texHeight, texChannels;
         void* pixels = nullptr;
         bool isHDR = false;

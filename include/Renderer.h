@@ -102,6 +102,7 @@ private:
     void createCompositeFramebuffers();
     void createDeferredDescriptorSets();
     void recreateDeferredDescriptorSets();
+    void updateLightsUniformBuffer();
     VkFormat findDepthFormat();
     VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
     void createCommandPool();
@@ -167,6 +168,8 @@ private:
     std::vector<VkDescriptorSet> ssrDescriptorSets{};
     std::vector<VkDescriptorSet> lightingDescriptorSets{};
     std::vector<VkDescriptorSet> compositeDescriptorSets{};
+    std::vector<VkBuffer> lightsUniformBuffers{};
+    std::vector<VkDeviceMemory> lightsUniformBuffersMemory{};
     std::vector<VkFramebuffer> gBufferFramebuffers;
     std::vector<VkFramebuffer> lightingFramebuffers;
     std::vector<VkFramebuffer> compositeFramebuffers;
