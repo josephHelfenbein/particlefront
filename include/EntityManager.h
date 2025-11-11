@@ -1,7 +1,10 @@
 #pragma once
 #include <map>
 #include <string>
+#include <vector>
 #include <Entity.h>
+
+class Light;
 
 class EntityManager {
 public:
@@ -14,7 +17,12 @@ public:
 
     void addEntity(const std::string& name, Entity* entity) {
         entities[name] = entity;
+        if (!entity->getParent()) {
+            rootEntities.push_back(entity);
+        }
     }
+
+    std::vector<Entity*>& getRootEntities() { return rootEntities; }
 
     Entity* getEntity(const std::string& name) {
         if (entities.find(name) != entities.end()) {
@@ -25,7 +33,11 @@ public:
 
     void removeEntity(const std::string& name) {
         if (entities.find(name) == entities.end()) return;
-        delete entities[name];
+        Entity* entity = entities[name];
+        if (!entity->getParent()) {
+            rootEntities.erase(std::remove(rootEntities.begin(), rootEntities.end(), entity), rootEntities.end());
+        }
+        delete entity;
         entities.erase(name);
     }
 
@@ -47,6 +59,21 @@ public:
         return &instance;
     }
 
+    std::vector<Light*> getDirtyLights() {
+        std::vector<Light*> dirty;
+        for (auto& light : dirtyLights) {
+            dirty.push_back(light);
+        }
+        dirtyLights.clear();
+        return dirty;
+    }
+
+    void markLightDirty(Light* light) {
+        dirtyLights.push_back(light);
+    }
+
 private:
     std::map<std::string, Entity*> entities;
+    std::vector<Entity*> rootEntities;
+    std::vector<Light*> dirtyLights;
 };

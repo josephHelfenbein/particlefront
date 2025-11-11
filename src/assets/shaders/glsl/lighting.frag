@@ -3,21 +3,23 @@
 layout(location = 0) in vec2 texCoord;
 
 struct PointLight {
-    vec3 position;
-    float radius;
-    vec3 color;
-    float intensity;
+    vec4 positionRadius;
+    vec4 colorIntensity;
+    mat4 lightViewProj[6];
+    vec4 shadowParams;
+    uvec4 shadowData;
 };
 
 layout(binding = 0) uniform LightsBuffer {
     PointLight lights[64];
-    uint numLights;
+    uvec4 lightCounts;
 } lightsUBO;
 
 layout(binding = 1) uniform sampler2D gBufferAlbedo;
 layout(binding = 2) uniform sampler2D gBufferNormal;
 layout(binding = 3) uniform sampler2D gBufferMaterial;
 layout(binding = 4) uniform sampler2D gBufferDepth;
+layout(binding = 5) uniform samplerCube shadowMaps[64];
 
 const float PI = 3.14159265358979323846;
 
@@ -70,6 +72,69 @@ float specularAntiAliasing(vec3 normal, float roughness){
     return clamp(roughness + kernelRoughness, 0.0, 1.0);
 }
 
+const uint INVALID_SHADOW_INDEX = 0xffffffffu;
+
+const vec3 sampleOffsetDirections[20] = vec3[](
+    vec3( 1,  1,  1), vec3( 1, -1,  1), vec3(-1, -1,  1), vec3(-1,  1,  1),
+    vec3( 1,  1, -1), vec3( 1, -1, -1), vec3(-1, -1, -1), vec3(-1,  1, -1),
+    vec3( 1,  1,  0), vec3( 1, -1,  0), vec3(-1, -1,  0), vec3(-1,  1,  0),
+    vec3( 1,  0,  1), vec3(-1,  0,  1), vec3( 1,  0, -1), vec3(-1,  0, -1),
+    vec3( 0,  1,  1), vec3( 0, -1,  1), vec3( 0, -1, -1), vec3( 0,  1, -1)
+);
+
+float computePointShadow(PointLight light, vec3 fragPos, vec3 geomNormal, vec3 lightDir) {
+    if (light.shadowData.y == 0u) {
+        return 1.0;
+    }
+    uint shadowIndex = light.shadowData.x;
+    if (shadowIndex == INVALID_SHADOW_INDEX || shadowIndex >= 64u) {
+        return 1.0;
+    }
+
+    vec3 lightPos = light.positionRadius.xyz;
+    vec3 toFrag = fragPos - lightPos;
+    float currentDistance = length(toFrag);
+    if (currentDistance <= 0.0001) {
+        return 1.0;
+    }
+
+    float farPlane = light.shadowParams.z;
+    if (currentDistance >= farPlane) {
+        return 1.0;
+    }
+
+    vec3 sampleDir = normalize(toFrag);
+    
+    float depthSample = texture(shadowMaps[shadowIndex], sampleDir).r;
+    
+    if (depthSample >= 0.9999) {
+        return 1.0;
+    }
+    uint samples = 30u;
+    float viewDistance = length(pc.cameraPos - fragPos);
+    float diskRadius = (1.0 + (viewDistance / farPlane)) / 25.0;
+    float shadow = 0.0;
+    for (uint i = 0u; i < samples; i++) {
+        vec3 offsetDir = sampleOffsetDirections[i];
+        vec3 sampleVec = sampleDir + offsetDir * diskRadius;
+        sampleVec = normalize(sampleVec);
+        float depthSample = texture(shadowMaps[shadowIndex], sampleVec).r;
+        float closestDistance = depthSample * farPlane;
+        
+        float NoLGeom = max(dot(geomNormal, lightDir), 0.0);
+        float baseBias = light.shadowParams.x;
+        float normalBias = baseBias * 5.0 * (1.0 - NoLGeom);
+        float bias = baseBias + normalBias;
+        
+        if (currentDistance > closestDistance + bias) {
+            shadow += 1.0;
+        }
+    }
+    shadow /= float(samples);
+    float strength = clamp(light.shadowParams.w, 0.0, 1.0);
+    return 1.0 - shadow * strength;
+}
+
 void main() {
     vec3 albedo = texture(gBufferAlbedo, texCoord).rgb;
     float alpha = texture(gBufferAlbedo, texCoord).a;
@@ -86,6 +151,15 @@ void main() {
     
     vec3 fragPos = reconstructPosition(texCoord, depth);
     vec3 V = normalize(pc.cameraPos - fragPos);
+    vec3 geomNormal = cross(dFdx(fragPos), dFdy(fragPos));
+    if (dot(geomNormal, geomNormal) > 1e-10) {
+        geomNormal = normalize(geomNormal);
+    } else {
+        geomNormal = N;
+    }
+    if (dot(geomNormal, N) < 0.0) {
+        geomNormal = -geomNormal;
+    }
     
     float roughness = specularAntiAliasing(N, baseRoughness);
     roughness = clamp(roughness, 0.05, 1.0);
@@ -94,14 +168,21 @@ void main() {
     float sigma = max(max(dNdX, dNdY), max(dVdX, dVdY));
     roughness = max(roughness, sigma);
 
+    uint numLights = lightsUBO.lightCounts.x;
+
     vec3 totalLo = vec3(0.0);
-    for (uint i = 0; i < lightsUBO.numLights; i++) {
+    for (uint i = 0u; i < numLights; i++) {
         PointLight light = lightsUBO.lights[i];
-        vec3 L = normalize(light.position - fragPos);
+        vec3 lightPos = light.positionRadius.xyz;
+        float radius = light.positionRadius.w;
+        vec3 lightColor = light.colorIntensity.rgb;
+        float intensity = light.colorIntensity.w;
+
+        vec3 L = normalize(lightPos - fragPos);
         vec3 H = normalize(V + L);
-        float distance = length(light.position - fragPos);
-        float attenuation = clamp(1.0 - (distance * distance) / (light.radius * light.radius), 0.0, 1.0);
-        vec3 radiance = light.color * light.intensity * attenuation;
+        float distance = length(lightPos - fragPos);
+        float attenuation = clamp(1.0 - (distance * distance) / (radius * radius), 0.0, 1.0);
+        vec3 radiance = lightColor * intensity * attenuation;
 
         float NdotL = max(dot(N, L), 0.0);
         float NdotV = max(dot(N, V), 0.0);
@@ -119,7 +200,10 @@ void main() {
         vec3 kD = (1.0 - kS) * (1.0 - metallic);
         vec4 diffuse = vec4(kD * albedo, alpha);
 
-        totalLo += (diffuse.rgb + specular) * radiance * NdotL;
+        float shadowVisibility = computePointShadow(light, fragPos, geomNormal, L);
+
+        vec3 lightingContribution = (diffuse.rgb + specular) * radiance * NdotL;
+        totalLo += lightingContribution * shadowVisibility;
     }
     float alphaOut = max(max(totalLo.r, totalLo.g), max(totalLo.b, alpha));
 

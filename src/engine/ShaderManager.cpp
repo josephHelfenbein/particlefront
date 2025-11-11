@@ -85,16 +85,28 @@ void ShaderManager::loadShader(const std::string& name, const std::string& verte
         .fragmentBitBindings = fragmentBitBindings,
     };
 
-    renderer->createDescriptorSetLayout(shader.vertexBitBindings, shader.fragmentBitBindings, shader.descriptorSetLayout);
+    std::vector<uint32_t> fragmentDescriptorCounts;
+    const std::vector<uint32_t>* fragmentDescriptorCountsPtr = nullptr;
+    if (name == "lighting") {
+        fragmentDescriptorCounts = {1u, 1u, 1u, 1u, kMaxPointLights};
+        fragmentDescriptorCountsPtr = &fragmentDescriptorCounts;
+    }
+    renderer->createDescriptorSetLayout(shader.vertexBitBindings, shader.fragmentBitBindings, shader.descriptorSetLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, fragmentDescriptorCountsPtr);
     VkPushConstantRange* pPCR = (shader.pushConstantRange.size > 0) ? &shader.pushConstantRange : nullptr;
     const bool isUI = (name == "ui");
     const bool isSkybox = (name == "skybox");
     const bool isGBuffer = (name == "gbuffer");
     const bool isDeferredLighting = (name == "lighting");
     const bool isComposite = (name == "composite");
+    const bool isShadowMap = (name == "shadowmap");
     const bool enableDepth = !isUI && !isDeferredLighting && !isComposite;
     const bool useTextVertex = isUI || isDeferredLighting || isComposite;
-    const VkCullModeFlags cullMode = isSkybox ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+    VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
+    if (isSkybox) {
+        cullMode = VK_CULL_MODE_NONE;
+    } else if (isShadowMap) {
+        cullMode = VK_CULL_MODE_NONE;
+    }
     const bool depthWrite = isSkybox ? false : enableDepth;
     const VkCompareOp depthCompare = isSkybox ? VK_COMPARE_OP_LESS_OR_EQUAL : VK_COMPARE_OP_LESS;
     const VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
@@ -117,9 +129,12 @@ void ShaderManager::loadShader(const std::string& name, const std::string& verte
     } else if (isSkybox) {
         renderPassToUse = renderer->getGBufferRenderPass();
         colorAttachmentCount = 3;
+    } else if (isShadowMap) {
+        renderPassToUse = renderer->getShadowMapRenderPass();
+        colorAttachmentCount = 0;
     }
     renderer->createGraphicsPipeline(shader.vertexPath, shader.fragmentPath, shader.pipeline, shader.pipelineLayout, shader.descriptorSetLayout, pPCR, enableDepth, useTextVertex, cullMode, frontFace, depthWrite, depthCompare, renderPassToUse, colorAttachmentCount, sampleCount, noVertexInput);
-    renderer->createDescriptorPool(shader.vertexBitBindings, shader.fragmentBitBindings, shader.descriptorPool, shader.poolMultiplier);
+    renderer->createDescriptorPool(shader.vertexBitBindings, shader.fragmentBitBindings, shader.descriptorPool, shader.poolMultiplier, false, fragmentDescriptorCountsPtr);
     shaders[name] = shader;
 }
 void ShaderManager::loadShader(const std::string& name, const std::string& computePath, int computeBitBindings, int storageImageCount, VkPushConstantRange pushConstantRange, int poolMultiplier) {
@@ -165,7 +180,7 @@ ShaderManager* ShaderManager::getInstance() {
             },
             .poolMultiplier = 4,
             .vertexBitBindings = 1,
-            .fragmentBitBindings = 4,
+            .fragmentBitBindings = 5,
         },
         new Shader{
             .name = "composite",
@@ -213,6 +228,19 @@ ShaderManager* ShaderManager::getInstance() {
             .poolMultiplier = 4,
             .computeBitBindings = 4,
             .storageImageCount = 1,
+        },
+        new Shader{
+            .name = "shadowmap",
+            .vertexPath = "src/assets/shaders/compiled/shadowmap.vert.spv",
+            .fragmentPath = "src/assets/shaders/compiled/shadowmap.frag.spv",
+            .pushConstantRange = {
+                .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                .offset = 0,
+                .size = sizeof(ShadowMapPushConstants),
+            },
+            .poolMultiplier = 64,
+            .vertexBitBindings = 0,
+            .fragmentBitBindings = 0,
         },
     };
     static ShaderManager instance(defaultShaders);

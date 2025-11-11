@@ -441,7 +441,7 @@ struct TextVertex{
         vkDestroyShaderModule(device, fragmentShader, nullptr);
         vkDestroyShaderModule(device, vertexShader, nullptr);
     }
-    void Renderer::createDescriptorSetLayout(int vertexBitBindings, int fragmentBitBindings, VkDescriptorSetLayout& descriptorSetLayout, VkShaderStageFlags shaderStage) {
+    void Renderer::createDescriptorSetLayout(int vertexBitBindings, int fragmentBitBindings, VkDescriptorSetLayout& descriptorSetLayout, VkShaderStageFlags shaderStage, const std::vector<uint32_t>* fragmentDescriptorCounts) {
         const int totalVertexBindings = std::max(vertexBitBindings, 0);
         const int totalFragmentBindings = std::max(fragmentBitBindings, 0);
         std::vector<VkDescriptorSetLayoutBinding> bindings;
@@ -463,10 +463,14 @@ struct TextVertex{
             bindings.push_back(vertexLayoutBinding);
         }
         for (int offset = 0; offset < totalFragmentBindings; ++offset) {
+            uint32_t descriptorCount = 1;
+            if (fragmentDescriptorCounts && static_cast<size_t>(offset) < fragmentDescriptorCounts->size()) {
+                descriptorCount = std::max((*fragmentDescriptorCounts)[static_cast<size_t>(offset)], 1u);
+            }
             VkDescriptorSetLayoutBinding fragmentLayoutBinding = {
                 .binding = static_cast<uint32_t>(totalVertexBindings + offset),
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
+                .descriptorCount = descriptorCount,
                 .stageFlags = isCompute ? VK_SHADER_STAGE_COMPUTE_BIT : VK_SHADER_STAGE_FRAGMENT_BIT,
                 .pImmutableSamplers = nullptr,
             };
@@ -481,7 +485,7 @@ struct TextVertex{
             throw std::runtime_error("failed to create descriptor set layout!");
         }
     }
-    void Renderer::createDescriptorPool(int vertexBitBindings, int fragmentBitBindings, VkDescriptorPool &descriptorPool, int multiplier, bool isCompute) {
+    void Renderer::createDescriptorPool(int vertexBitBindings, int fragmentBitBindings, VkDescriptorPool &descriptorPool, int multiplier, bool isCompute, const std::vector<uint32_t>* fragmentDescriptorCounts) {
         std::vector<VkDescriptorPoolSize> poolSizes;
         if (vertexBitBindings > 0) {
             VkDescriptorPoolSize vertexPoolSize = {
@@ -491,9 +495,16 @@ struct TextVertex{
             poolSizes.push_back(vertexPoolSize);
         }
         if (fragmentBitBindings > 0) {
+            uint32_t totalFragmentDescriptors = static_cast<uint32_t>(fragmentBitBindings);
+            if (fragmentDescriptorCounts && fragmentDescriptorCounts->size() == static_cast<size_t>(fragmentBitBindings)) {
+                totalFragmentDescriptors = 0;
+                for (uint32_t count : *fragmentDescriptorCounts) {
+                    totalFragmentDescriptors += std::max(count, 1u);
+                }
+            }
             VkDescriptorPoolSize fragmentPoolSize = {
                 .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = static_cast<uint32_t>(fragmentBitBindings * MAX_FRAMES_IN_FLIGHT * multiplier),
+                .descriptorCount = totalFragmentDescriptors * static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * multiplier),
             };
             poolSizes.push_back(fragmentPoolSize);
         }
@@ -859,6 +870,10 @@ struct TextVertex{
             vkDestroyRenderPass(device, lightingRenderPass, nullptr);
             lightingRenderPass = VK_NULL_HANDLE;
         }
+        if (shadowRenderPass) {
+            vkDestroyRenderPass(device, shadowRenderPass, nullptr);
+            shadowRenderPass = VK_NULL_HANDLE;
+        }
         if (compositeRenderPass) {
             vkDestroyRenderPass(device, compositeRenderPass, nullptr);
             compositeRenderPass = VK_NULL_HANDLE;
@@ -948,6 +963,7 @@ struct TextVertex{
         createGBufferFramebuffers();
         createLightingResources();
         createLightingRenderPass();
+        createShadowRenderPass();
         createLightingFramebuffers();
         createCompositeRenderPass();
         createCompositeFramebuffers();
@@ -1385,7 +1401,7 @@ void Renderer::createInstance() {
             .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
         };
         
         VkAttachmentReference colorRefs[3] = {
@@ -1482,6 +1498,52 @@ void Renderer::createInstance() {
         };
         if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &lightingRenderPass) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create lighting render pass!");
+        }
+    }
+    void Renderer::createShadowRenderPass() {
+        if (shadowRenderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(device, shadowRenderPass, nullptr);
+            shadowRenderPass = VK_NULL_HANDLE;
+        }
+        VkAttachmentDescription depthAttachment = {
+            .format = findDepthFormat(),
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+        VkAttachmentReference depthRef = {
+            .attachment = 0,
+            .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+        VkSubpassDescription subpass = {
+            .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+            .colorAttachmentCount = 0,
+            .pColorAttachments = nullptr,
+            .pDepthStencilAttachment = &depthRef,
+        };
+        VkSubpassDependency dependency = {
+            .srcSubpass = VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            .srcAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        };
+        VkRenderPassCreateInfo renderPassInfo = {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+            .attachmentCount = 1,
+            .pAttachments = &depthAttachment,
+            .subpassCount = 1,
+            .pSubpasses = &subpass,
+            .dependencyCount = 1,
+            .pDependencies = &dependency,
+        };
+        if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &shadowRenderPass) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create shadow render pass!");
         }
     }
     void Renderer::createGBufferFramebuffers() {
@@ -1638,10 +1700,33 @@ void Renderer::createInstance() {
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 lightsUniformBuffers[i], lightsUniformBuffersMemory[i]);
         }
-        LightsBuffer lightBufferData = {
-            .lights = {},
-            .numLights = 0,
-        };
+
+        LightsBuffer lightBufferData{};
+        {
+            std::array<PointLight, kMaxPointLights> collectedLights{};
+            uint32_t lightCount = 0;
+            auto traverse = [&](auto&& self, Entity* entity) -> void {
+                if (entity->isActive()) {
+                    if (auto* light = dynamic_cast<Light*>(entity)) {
+                        if (lightCount < kMaxPointLights) {
+                            collectedLights[lightCount++] = light->getPointLightData();
+                        }
+                    }
+                }
+                for (Entity* child : entity->getChildren()) {
+                    self(self, child);
+                }
+            };
+            for (auto& [name, entity] : entityManager->getAllEntities()) {
+                if (entity->isActive() && entity->getParent() == nullptr) {
+                    traverse(traverse, entity);
+                }
+            }
+            if (lightCount > 0) {
+                std::memcpy(lightBufferData.lights, collectedLights.data(), sizeof(PointLight) * lightCount);
+            }
+            lightBufferData.counts = glm::uvec4(lightCount, 0u, 0u, 0u);
+        }
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             void* data;
             vkMapMemory(device, lightsUniformBuffersMemory[i], 0, bufferSize, 0, &data);
@@ -1661,12 +1746,20 @@ void Renderer::createInstance() {
             throw std::runtime_error("Failed to allocate lighting descriptor sets!");
         }
         
+        for (auto& info : shadowCubeDescriptorInfos) {
+            info.sampler = VK_NULL_HANDLE;
+            info.imageView = VK_NULL_HANDLE;
+            info.imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        }
+        shadowCubeDescriptorCount = 0;
+
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             VkDescriptorBufferInfo bufferInfo = {
                 .buffer = lightsUniformBuffers[i],
                 .offset = 0,
                 .range = bufferSize,
             };
+
             std::array<VkDescriptorImageInfo, 4> imageInfos = {{
                 {
                     .sampler = gBufferSampler,
@@ -1686,58 +1779,89 @@ void Renderer::createInstance() {
                 {
                     .sampler = gBufferSampler,
                     .imageView = gBufferDepthView,
-                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                 }
             }};
-            
-            std::array<VkWriteDescriptorSet, 5> descriptorWrites = {{
-                {
+
+            std::vector<VkWriteDescriptorSet> descriptorWrites;
+            descriptorWrites.reserve(6);
+            descriptorWrites.push_back({
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = lightingDescriptorSets[i],
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .pImageInfo = nullptr,
+                .pBufferInfo = &bufferInfo,
+                .pTexelBufferView = nullptr,
+            });
+            descriptorWrites.push_back({
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = lightingDescriptorSets[i],
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &imageInfos[0],
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
+            });
+            descriptorWrites.push_back({
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = lightingDescriptorSets[i],
+                .dstBinding = 2,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &imageInfos[1],
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
+            });
+            descriptorWrites.push_back({
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = lightingDescriptorSets[i],
+                .dstBinding = 3,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &imageInfos[2],
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
+            });
+            descriptorWrites.push_back({
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = lightingDescriptorSets[i],
+                .dstBinding = 4,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &imageInfos[3],
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
+            });
+
+            if (shadowCubeDescriptorCount > 0) {
+                descriptorWrites.push_back({
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = nullptr,
                     .dstSet = lightingDescriptorSets[i],
-                    .dstBinding = 0,
+                    .dstBinding = 5,
                     .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .pBufferInfo = &bufferInfo,
-                },
-                {
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = lightingDescriptorSets[i],
-                    .dstBinding = 1,
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
+                    .descriptorCount = shadowCubeDescriptorCount,
                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &imageInfos[0],
-                },
-                {
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = lightingDescriptorSets[i],
-                    .dstBinding = 2,
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &imageInfos[1],
-                },
-                {
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = lightingDescriptorSets[i],
-                    .dstBinding = 3,
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &imageInfos[2],
-                },
-                {
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = lightingDescriptorSets[i],
-                    .dstBinding = 4,
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &imageInfos[3],
-                },
-            }};
-            vkUpdateDescriptorSets(device, 5, descriptorWrites.data(), 0, nullptr);
+                    .pImageInfo = shadowCubeDescriptorInfos.data(),
+                    .pBufferInfo = nullptr,
+                    .pTexelBufferView = nullptr,
+                });
+            }
+
+            vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
         }
         std::vector<VkDescriptorSetLayout> compositeLayouts(MAX_FRAMES_IN_FLIGHT, compositeShader->descriptorSetLayout);
         VkDescriptorSetAllocateInfo compositeAllocInfo = {
@@ -1870,38 +1994,105 @@ void Renderer::createInstance() {
             vkUpdateDescriptorSets(device, 4, descriptorWrites.data(), 0, nullptr);
         }
     }
-    void Renderer::updateLightsUniformBuffer() {
-        PointLight* pointLights = (PointLight*)malloc(sizeof(PointLight) * 64);
-        std::map<std::string, Entity*>& entities = entityManager->getAllEntities();
-        int lightCount = 0;
+    void Renderer::updateLightsUniformBuffer(const std::vector<Light*>& dirtyLights) {
+        constexpr uint32_t kInvalidShadowIndex = std::numeric_limits<uint32_t>::max();
+
+        std::array<PointLight, kMaxPointLights> pointLights{};
+        std::array<VkDescriptorImageInfo, kMaxShadowCubeSlots> newShadowInfos{};
+        for (auto& info : newShadowInfos) {
+            info.sampler = VK_NULL_HANDLE;
+            info.imageView = VK_NULL_HANDLE;
+            info.imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        }
+
+        uint32_t lightCount = 0;
+        uint32_t shadowSlot = 0;
+        auto processLight = [&](Light* light) {
+            if (!light || !light->isActive()) {
+                return;
+            }
+
+            uint32_t assignedShadowIndex = kInvalidShadowIndex;
+            if (light->getCastsShadows() && shadowSlot < kMaxShadowCubeSlots) {
+                Image* shadowImage = light->getShadowMap();
+                if (shadowImage && shadowImage->imageView != VK_NULL_HANDLE && shadowImage->imageSampler != VK_NULL_HANDLE) {
+                    assignedShadowIndex = shadowSlot;
+                    newShadowInfos[shadowSlot] = {
+                        .sampler = shadowImage->imageSampler,
+                        .imageView = shadowImage->imageView,
+                        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                    };
+                    ++shadowSlot;
+                }
+            }
+
+            light->setShadowMapIndex(assignedShadowIndex);
+
+            if (lightCount < kMaxPointLights) {
+                pointLights[lightCount++] = light->getPointLightData();
+            }
+        };
+
+        std::vector<Entity*>& rootEntities = entityManager->getRootEntities();
         auto traverse = [&](auto&& self, Entity* entity) -> void {
             if (entity->isActive()) {
                 if (auto* light = dynamic_cast<Light*>(entity)) {
-                    if (lightCount < 64) {
-                        pointLights[lightCount++] = light->getPointLightData();
-                    }
+                    processLight(light);
                 }
             }
             for (Entity* child : entity->getChildren()) {
                 self(self, child);
             }
         };
-        for (auto& [name, entity] : entities) {
+        for (Entity* entity : rootEntities) {
             if (entity->isActive() && entity->getParent() == nullptr) {
                 traverse(traverse, entity);
             }
         }
-        
-        LightsBuffer lightBufferData;
-        std::memcpy(lightBufferData.lights, pointLights, sizeof(PointLight) * lightCount);
-        lightBufferData.numLights = static_cast<uint32_t>(lightCount);
-        free(pointLights);
-        
+
+        LightsBuffer lightBufferData{};
+        if (lightCount > 0) {
+            std::memcpy(lightBufferData.lights, pointLights.data(), sizeof(PointLight) * lightCount);
+        }
+        lightBufferData.counts = glm::uvec4(lightCount, 0u, 0u, 0u);
+
         VkDeviceSize bufferSize = sizeof(LightsBuffer);
         void* data;
         vkMapMemory(device, lightsUniformBuffersMemory[currentFrame], 0, bufferSize, 0, &data);
         memcpy(data, &lightBufferData, bufferSize);
         vkUnmapMemory(device, lightsUniformBuffersMemory[currentFrame]);
+
+        bool descriptorSetNeedsUpdate = !dirtyLights.empty();
+        if (!descriptorSetNeedsUpdate) {
+            descriptorSetNeedsUpdate = (shadowSlot != shadowCubeDescriptorCount) ||
+                (std::memcmp(newShadowInfos.data(), shadowCubeDescriptorInfos.data(), sizeof(VkDescriptorImageInfo) * kMaxShadowCubeSlots) != 0);
+        }
+
+        if (descriptorSetNeedsUpdate) {
+            shadowCubeDescriptorInfos = newShadowInfos;
+            shadowCubeDescriptorCount = shadowSlot;
+
+            if (!lightingDescriptorSets.empty() && shadowCubeDescriptorCount > 0) {
+                VkWriteDescriptorSet shadowWrite = {
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = nullptr,
+                    .dstBinding = 5,
+                    .dstArrayElement = 0,
+                    .descriptorCount = shadowCubeDescriptorCount,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .pImageInfo = shadowCubeDescriptorInfos.data(),
+                    .pBufferInfo = nullptr,
+                    .pTexelBufferView = nullptr,
+                };
+                for (VkDescriptorSet descriptorSet : lightingDescriptorSets) {
+                    if (descriptorSet == VK_NULL_HANDLE) {
+                        continue;
+                    }
+                    shadowWrite.dstSet = descriptorSet;
+                    vkUpdateDescriptorSets(device, 1, &shadowWrite, 0, nullptr);
+                }
+            }
+        }
     }
     void Renderer::recreateDeferredDescriptorSets() {
         Shader* lightingShader = shaderManager->getShader("lighting");
@@ -2008,8 +2199,120 @@ void Renderer::createInstance() {
             }
         }
     }
+    void Renderer::renderEntitiesShadowDepth(VkCommandBuffer commandBuffer, const std::vector<Light*>& lights) {
+        if (lights.empty()) return;
+        Shader* shadowShader = shaderManager->getShader("shadowmap");
+        if (!shadowShader) {
+            return;
+        }
+
+        auto& rootEntities = entityManager->getRootEntities();
+        if (rootEntities.empty()) {
+            return;
+        }
+
+        auto renderEntity = [&](Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> bool {
+            if (!entity->isActive()) {
+                return false;
+            }
+            std::string shaderName = entity->getShader();
+            if (shaderName != "gbuffer") {
+                return true;
+            }
+            glm::mat4 modelMatrix = entity->getWorldTransform();
+            Model* model = entity->getModel();
+            if (!model) return true;
+
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowShader->pipeline);
+            VkViewport viewport = {
+                .x = 0.0f,
+                .y = 0.0f,
+                .width = static_cast<float>(extent.width),
+                .height = static_cast<float>(extent.height),
+                .minDepth = 0.0f,
+                .maxDepth = 1.0f,
+            };
+            vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+            VkRect2D scissor = {
+                .offset = {0, 0},
+                .extent = extent,
+            };
+            vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+            ShadowMapPushConstants pushConstants = {
+                .model = modelMatrix,
+                .lightViewProj = lightViewProj,
+                .lightPosFar = lightPosFar,
+            };
+            vkCmdPushConstants(commandBuffer, shadowShader->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushConstants), &pushConstants);
+            const uint32_t indexCount = model->getIndexCount();
+            if (indexCount > 0) {
+                VkBuffer vertexBuffer = model->getVertexBuffer();
+                VkBuffer indexBuffer = model->getIndexBuffer();
+                if (vertexBuffer != VK_NULL_HANDLE && indexBuffer != VK_NULL_HANDLE) {
+                    VkDeviceSize offsets[] = {0};
+                    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, offsets);
+                    vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                    vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
+                }
+            }
+            return true;
+        };
+        auto traverse = [&](auto&& self, Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> void {
+            if (!renderEntity(entity, lightViewProj, lightPosFar, extent)) {
+                return;
+            }
+            for (Entity* child : entity->getChildren()) {
+                self(self, child, lightViewProj, lightPosFar, extent);
+            }
+        };
+        for (Light* light : lights) {
+            if (!light || !light->isActive() || !light->getCastsShadows()) {
+                continue;
+            }
+            glm::vec3 pos = light->getWorldPosition();
+            float nearPlane = light->getShadowNearPlane();
+            float farPlane = light->getShadowFarPlane();
+            glm::mat4 shadowProj = glm::perspective(glm::radians(90.0f), 1.0f, nearPlane, farPlane);
+            glm::mat4 views[6] = {
+                glm::lookAt(pos, pos + glm::vec3(1, 0, 0),  glm::vec3(0,-1, 0)),
+                glm::lookAt(pos, pos + glm::vec3(-1,0, 0),  glm::vec3(0,-1, 0)),
+                glm::lookAt(pos, pos + glm::vec3(0, 1, 0),  glm::vec3(0, 0, 1)),
+                glm::lookAt(pos, pos + glm::vec3(0,-1, 0),  glm::vec3(0, 0,-1)),
+                glm::lookAt(pos, pos + glm::vec3(0, 0, 1),  glm::vec3(0,-1, 0)),
+                glm::lookAt(pos, pos + glm::vec3(0, 0,-1),  glm::vec3(0,-1, 0)),
+            };
+
+            Image* shadowMap = light->getShadowMap();
+            if (!shadowMap) {
+                continue;
+            }
+            VkExtent2D extent = { static_cast<uint32_t>(shadowMap->width), static_cast<uint32_t>(shadowMap->height) };
+
+            light->transitionShadowMapLayout(commandBuffer, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, shadowMap);
+            for (int face = 0; face < 6; ++face) {
+                VkFramebuffer framebuffer = light->getShadowFrameBuffer(face);
+                if (framebuffer == VK_NULL_HANDLE) {
+                    continue;
+                }
+
+                VkRenderPassBeginInfo renderPassInfo = light->getShadowRenderPassBeginInfo(framebuffer, extent, face);
+                vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+                glm::mat4 lightView = views[face];
+                glm::mat4 lightViewProj = shadowProj * lightView;
+                light->setShadowViewProjection(face, lightViewProj);
+                glm::vec4 lightPosFar = glm::vec4(pos, farPlane);
+                for (Entity* root : rootEntities) {
+                    traverse(traverse, root, lightViewProj, lightPosFar, extent);
+                }
+
+                vkCmdEndRenderPass(commandBuffer);
+            }
+            light->transitionShadowMapLayout(commandBuffer, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, shadowMap);
+        }
+    }
     void Renderer::renderEntitiesGeometry(VkCommandBuffer commandBuffer) {
-        auto& entities = entityManager->getAllEntities();
+        auto& rootEntities = entityManager->getRootEntities();
         glm::vec3 cameraPos = glm::vec3(0.0f, 0.0f, 5.0f);
         float cameraFOV = 45.0f;
         glm::mat4 view = glm::mat4(1.0f);
@@ -2086,7 +2389,7 @@ void Renderer::createInstance() {
             return true;
         };
         
-        if (entities.empty()) return;
+        if (rootEntities.empty()) return;
         
         auto traverse = [&](auto&& self, Entity* entity) -> void {
             if (!renderEntity(entity)) {
@@ -2097,10 +2400,8 @@ void Renderer::createInstance() {
             }
         };
         
-        for (auto& [name, entity] : entities) {
-            if (entity->getParent() == nullptr) {
-                traverse(traverse, entity);
-            }
+        for (Entity* entity : rootEntities) {
+            traverse(traverse, entity);
         }
     }
     void Renderer::transitionGBufferForReading(VkCommandBuffer commandBuffer) {
@@ -2133,7 +2434,7 @@ void Renderer::createInstance() {
         barriers[3].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         barriers[3].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         barriers[3].oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        barriers[3].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barriers[3].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         barriers[3].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barriers[3].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barriers[3].image = gBufferDepthImage;
@@ -2399,6 +2700,8 @@ void Renderer::createInstance() {
         if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
             throw std::runtime_error("failed to begin recording command buffer!");
         }
+        std::vector<Light*> lights = entityManager->getDirtyLights();
+        renderEntitiesShadowDepth(commandBuffer, lights);
         {
             VkClearValue clearValues[4];
             clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};  // Albedo
@@ -2435,7 +2738,7 @@ void Renderer::createInstance() {
             };
             
             vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-            updateLightsUniformBuffer();
+            updateLightsUniformBuffer(lights);
             renderDeferredLighting(commandBuffer);
             vkCmdEndRenderPass(commandBuffer);
         }
@@ -2801,7 +3104,6 @@ void Renderer::createInstance() {
             }
 
             LayoutRect designRect = resolveDesignRect(node, parentDesignRect);
-            LayoutRect pixelRect = toPixelRect(designRect, canvasOrigin, layoutScale);
             const float invLayout = layoutScale > 0.0f ? (1.0f / layoutScale) : 0.0f;
             glm::vec2 mouseDesign = (mousePosF - canvasOrigin) * invLayout;
 

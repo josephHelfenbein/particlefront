@@ -78,15 +78,15 @@ void Scene1() {
     walls->setModel(ModelManager::getInstance()->getModel("walls"));
     entityMgr->addEntity("walls", walls);
 
-    for (int i = 0; i < 8; ++i) {
-        Entity* lightHolder = new Entity("lightHolder" + std::to_string(i), "gbuffer", {0.0f, 0.0f, 0.0f}, {0.0f, i * 45.0f, 0.0f}, {1.2f, 1.2f, 1.2f}, {"materials_light_albedo", "materials_light_metallic", "materials_light_roughness", "materials_light_normal"});
+    for (int i = 0; i < 3; ++i) {
+        Entity* lightHolder = new Entity("lightHolder" + std::to_string(i), "gbuffer", {0.0f, -5.0f, 0.0f}, {0.0f, i * 120.0f, 0.0f}, {1.2f, 1.2f, 1.2f}, {"materials_light_albedo", "materials_light_metallic", "materials_light_roughness", "materials_light_normal"});
         lightHolder->setModel(ModelManager::getInstance()->getModel("light"));
-        Light* light = new Light("light" + std::to_string(i), 100.0f, {1.0f, 1.0f, 1.0f}, 5.0f, blenderPosToEngine({-74.345f, 0.0f, 21.414f}));
+        Light* light = new Light("light" + std::to_string(i), 100.0f, {1.0f, 1.0f, 1.0f}, 10.0f, blenderPosToEngine({-74.345f, 0.0f, 16.414f}));
         lightHolder->addChild(light);
         entityMgr->addEntity("lightHolder" + std::to_string(i), lightHolder);
     }
 
-    Player* player = new Player({16.0f, 10.0f, -9.0f}, {0.0f, 0.0f, 0.0f});
+    Player* player = new Player({16.0f, 5.0f, -9.0f}, {0.0f, 0.0f, 0.0f});
     
     entityMgr->addEntity("skybox", skybox);
 

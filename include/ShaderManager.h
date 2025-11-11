@@ -6,6 +6,8 @@
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 
+inline constexpr uint32_t kMaxPointLights = 64;
+
 class Renderer;
 
 struct Shader {
@@ -51,15 +53,16 @@ struct alignas(16) UniformBufferObject {
 };
 
 struct alignas(16) PointLight {
-    alignas(16) glm::vec3 position;
-    alignas(4) float radius;
-    alignas(16) glm::vec3 color;
-    alignas(4) float intensity;
+    glm::vec4 positionRadius; // xyz = position, w = radius
+    glm::vec4 colorIntensity; // rgb = color, w = intensity
+    glm::mat4 lightViewProj[6]; // Shadow cubemap view-projection matrix
+    glm::vec4 shadowParams; // x = bias, y = near, z = far, w = strength
+    glm::uvec4 shadowData; // x = shadow map index, y = castsShadow flag, others reserved
 };
 
 struct alignas(16) LightsBuffer {
-    PointLight lights[64];
-    uint32_t numLights;
+    PointLight lights[kMaxPointLights];
+    glm::uvec4 counts; // x = numLights, other components reserved
 };
 
 struct alignas(16) LightingPushConstants {
@@ -73,6 +76,12 @@ struct alignas(16) SSRPushConstants {
     glm::mat4 proj;
     glm::mat4 invView;
     glm::mat4 invProj;
+};
+
+struct alignas(16) ShadowMapPushConstants {
+    glm::mat4 model;
+    glm::mat4 lightViewProj;
+    glm::vec4 lightPosFar; // xyz = light position, w = far plane
 };
 
 class ShaderManager {

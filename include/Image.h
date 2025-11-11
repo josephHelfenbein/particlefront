@@ -5,6 +5,7 @@
 class Image {
 public:
     Image() = default;
+    Image(const std::string& path, VkFormat format, int width, int height) : path(path), format(format), width(width), height(height) {}
     ~Image() = default;
     std::string path;
     VkImage image = VK_NULL_HANDLE;
