@@ -5,6 +5,7 @@
 #include <vector>
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
+#include <variant>
 
 inline constexpr uint32_t kMaxPointLights = 64;
 

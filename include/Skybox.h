@@ -25,11 +25,12 @@ class Skybox : public Entity {
 public:
     Skybox() : Entity("skybox", "skybox", {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, glm::vec3(100.0f), ensureCubemapTexture()) {
         this->setModel(ModelManager::getInstance()->getModel("cube"));
+        this->camera = EntityManager::getInstance()->getEntity("camera");
     }
     void update(float deltaTime) override;
 
 private:
     static std::vector<std::string> ensureCubemapTexture();
     static bool createCubemapTexture();
-    Entity* camera = EntityManager::getInstance()->getEntity("camera");
+    Entity* camera = nullptr;
 };

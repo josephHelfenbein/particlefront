@@ -471,7 +471,7 @@ struct TextVertex{
                 .binding = static_cast<uint32_t>(totalVertexBindings + offset),
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 .descriptorCount = descriptorCount,
-                .stageFlags = isCompute ? VK_SHADER_STAGE_COMPUTE_BIT : VK_SHADER_STAGE_FRAGMENT_BIT,
+                .stageFlags = static_cast<VkShaderStageFlags>(isCompute ? VK_SHADER_STAGE_COMPUTE_BIT : VK_SHADER_STAGE_FRAGMENT_BIT),
                 .pImmutableSamplers = nullptr,
             };
             bindings.push_back(fragmentLayoutBinding);
