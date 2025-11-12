@@ -874,6 +874,10 @@ struct TextVertex{
             vkDestroyRenderPass(device, shadowRenderPass, nullptr);
             shadowRenderPass = VK_NULL_HANDLE;
         }
+        if (shadowRenderPassLoad) {
+            vkDestroyRenderPass(device, shadowRenderPassLoad, nullptr);
+            shadowRenderPassLoad = VK_NULL_HANDLE;
+        }
         if (compositeRenderPass) {
             vkDestroyRenderPass(device, compositeRenderPass, nullptr);
             compositeRenderPass = VK_NULL_HANDLE;
@@ -964,6 +968,7 @@ struct TextVertex{
         createLightingResources();
         createLightingRenderPass();
         createShadowRenderPass();
+        createShadowRenderPassLoad();
         createLightingFramebuffers();
         createCompositeRenderPass();
         createCompositeFramebuffers();
@@ -1546,6 +1551,53 @@ void Renderer::createInstance() {
             throw std::runtime_error("Failed to create shadow render pass!");
         }
     }
+
+    void Renderer::createShadowRenderPassLoad() {
+        if (shadowRenderPassLoad != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(device, shadowRenderPassLoad, nullptr);
+            shadowRenderPassLoad = VK_NULL_HANDLE;
+        }
+        VkAttachmentDescription depthAttachment = {
+            .format = findDepthFormat(),
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+        VkAttachmentReference depthRef = {
+            .attachment = 0,
+            .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+        VkSubpassDescription subpass = {
+            .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+            .colorAttachmentCount = 0,
+            .pColorAttachments = nullptr,
+            .pDepthStencilAttachment = &depthRef,
+        };
+        VkSubpassDependency dependency = {
+            .srcSubpass = VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        };
+        VkRenderPassCreateInfo renderPassInfo = {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+            .attachmentCount = 1,
+            .pAttachments = &depthAttachment,
+            .subpassCount = 1,
+            .pSubpasses = &subpass,
+            .dependencyCount = 1,
+            .pDependencies = &dependency,
+        };
+        if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &shadowRenderPassLoad) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create shadow render pass load!");
+        }
+    }
     void Renderer::createGBufferFramebuffers() {
         gBufferFramebuffers.resize(swapChainImageViews.size());
         for (size_t i = 0; i < swapChainImageViews.size(); i++) {
@@ -1994,7 +2046,8 @@ void Renderer::createInstance() {
             vkUpdateDescriptorSets(device, 4, descriptorWrites.data(), 0, nullptr);
         }
     }
-    void Renderer::updateLightsUniformBuffer(const std::vector<Light*>& dirtyLights) {
+    void Renderer::updateLightsUniformBuffer() {
+        std::vector<Light*> lights = entityManager->getAllLights();
         constexpr uint32_t kInvalidShadowIndex = std::numeric_limits<uint32_t>::max();
 
         std::array<PointLight, kMaxPointLights> pointLights{};
@@ -2014,7 +2067,7 @@ void Renderer::createInstance() {
 
             uint32_t assignedShadowIndex = kInvalidShadowIndex;
             if (light->getCastsShadows() && shadowSlot < kMaxShadowCubeSlots) {
-                Image* shadowImage = light->getShadowMap();
+                Image* shadowImage = light->getDynamicShadowMap();
                 if (shadowImage && shadowImage->imageView != VK_NULL_HANDLE && shadowImage->imageSampler != VK_NULL_HANDLE) {
                     assignedShadowIndex = shadowSlot;
                     newShadowInfos[shadowSlot] = {
@@ -2062,35 +2115,27 @@ void Renderer::createInstance() {
         memcpy(data, &lightBufferData, bufferSize);
         vkUnmapMemory(device, lightsUniformBuffersMemory[currentFrame]);
 
-        bool descriptorSetNeedsUpdate = !dirtyLights.empty();
-        if (!descriptorSetNeedsUpdate) {
-            descriptorSetNeedsUpdate = (shadowSlot != shadowCubeDescriptorCount) ||
-                (std::memcmp(newShadowInfos.data(), shadowCubeDescriptorInfos.data(), sizeof(VkDescriptorImageInfo) * kMaxShadowCubeSlots) != 0);
-        }
+        shadowCubeDescriptorInfos = newShadowInfos;
+        shadowCubeDescriptorCount = shadowSlot;
 
-        if (descriptorSetNeedsUpdate) {
-            shadowCubeDescriptorInfos = newShadowInfos;
-            shadowCubeDescriptorCount = shadowSlot;
-
-            if (!lightingDescriptorSets.empty() && shadowCubeDescriptorCount > 0) {
-                VkWriteDescriptorSet shadowWrite = {
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .pNext = nullptr,
-                    .dstBinding = 5,
-                    .dstArrayElement = 0,
-                    .descriptorCount = shadowCubeDescriptorCount,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = shadowCubeDescriptorInfos.data(),
-                    .pBufferInfo = nullptr,
-                    .pTexelBufferView = nullptr,
-                };
-                for (VkDescriptorSet descriptorSet : lightingDescriptorSets) {
-                    if (descriptorSet == VK_NULL_HANDLE) {
-                        continue;
-                    }
-                    shadowWrite.dstSet = descriptorSet;
-                    vkUpdateDescriptorSets(device, 1, &shadowWrite, 0, nullptr);
+        if (!lightingDescriptorSets.empty() && shadowCubeDescriptorCount > 0) {
+            VkWriteDescriptorSet shadowWrite = {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstBinding = 5,
+                .dstArrayElement = 0,
+                .descriptorCount = shadowCubeDescriptorCount,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = shadowCubeDescriptorInfos.data(),
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
+            };
+            for (VkDescriptorSet descriptorSet : lightingDescriptorSets) {
+                if (descriptorSet == VK_NULL_HANDLE) {
+                    continue;
                 }
+                shadowWrite.dstSet = descriptorSet;
+                vkUpdateDescriptorSets(device, 1, &shadowWrite, 0, nullptr);
             }
         }
     }
@@ -2212,7 +2257,7 @@ void Renderer::createInstance() {
         }
 
         auto renderEntity = [&](Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> bool {
-            if (!entity->isActive()) {
+            if (!entity->isActive() || entity->isMovable()) {
                 return false;
             }
             std::string shaderName = entity->getShader();
@@ -2309,6 +2354,132 @@ void Renderer::createInstance() {
                 vkCmdEndRenderPass(commandBuffer);
             }
             light->transitionShadowMapLayout(commandBuffer, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, shadowMap);
+        }
+    }
+    void Renderer::renderEntitiesMovableShadowDepth(VkCommandBuffer commandBuffer) {
+        std::vector<Light*> lights;
+        lights = entityManager->getAllLights();
+        if (lights.empty()) return;
+        Shader* shadowShader = shaderManager->getShader("shadowmap");
+        if (!shadowShader) {
+            return;
+        }
+
+        std::vector<Entity*> movableEntities = entityManager->getMovableEntities();
+
+        auto renderEntity = [&](Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> bool {
+            if (!entity->isActive()) {
+                return false;
+            }
+            std::string shaderName = entity->getShader();
+            if (shaderName != "gbuffer") {
+                return true;
+            }
+            glm::mat4 modelMatrix = entity->getWorldTransform();
+            Model* model = entity->getModel();
+            if (!model) return true;
+
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowShader->pipeline);
+            VkViewport viewport = {
+                .x = 0.0f,
+                .y = 0.0f,
+                .width = static_cast<float>(extent.width),
+                .height = static_cast<float>(extent.height),
+                .minDepth = 0.0f,
+                .maxDepth = 1.0f,
+            };
+            vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+            VkRect2D scissor = {
+                .offset = {0, 0},
+                .extent = extent,
+            };
+            vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+            ShadowMapPushConstants pushConstants = {
+                .model = modelMatrix,
+                .lightViewProj = lightViewProj,
+                .lightPosFar = lightPosFar,
+            };
+            vkCmdPushConstants(commandBuffer, shadowShader->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushConstants), &pushConstants);
+            const uint32_t indexCount = model->getIndexCount();
+            if (indexCount > 0) {
+                VkBuffer vertexBuffer = model->getVertexBuffer();
+                VkBuffer indexBuffer = model->getIndexBuffer();
+                if (vertexBuffer != VK_NULL_HANDLE && indexBuffer != VK_NULL_HANDLE) {
+                    VkDeviceSize offsets[] = {0};
+                    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, offsets);
+                    vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                    vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
+                }
+            }
+            return true;
+        };
+        auto traverse = [&](auto&& self, Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> void {
+            if (!renderEntity(entity, lightViewProj, lightPosFar, extent)) {
+                return;
+            }
+            for (Entity* child : entity->getChildren()) {
+                self(self, child, lightViewProj, lightPosFar, extent);
+            }
+        };
+        for (Light* light : lights) {
+            if (!light || !light->isActive() || !light->getCastsShadows()) {
+                continue;
+            }
+            glm::vec3 pos = light->getWorldPosition();
+            float nearPlane = light->getShadowNearPlane();
+            float farPlane = light->getShadowFarPlane();
+            glm::mat4 shadowProj = glm::perspective(glm::radians(90.0f), 1.0f, nearPlane, farPlane);
+            glm::mat4 views[6] = {
+                glm::lookAt(pos, pos + glm::vec3(1, 0, 0),  glm::vec3(0,-1, 0)),
+                glm::lookAt(pos, pos + glm::vec3(-1,0, 0),  glm::vec3(0,-1, 0)),
+                glm::lookAt(pos, pos + glm::vec3(0, 1, 0),  glm::vec3(0, 0, 1)),
+                glm::lookAt(pos, pos + glm::vec3(0,-1, 0),  glm::vec3(0, 0,-1)),
+                glm::lookAt(pos, pos + glm::vec3(0, 0, 1),  glm::vec3(0,-1, 0)),
+                glm::lookAt(pos, pos + glm::vec3(0, 0,-1),  glm::vec3(0,-1, 0)),
+            };
+
+            Image* shadowMap = light->getShadowMap();
+            Image* dynamicShadowMap = light->getDynamicShadowMap();
+            if (!shadowMap || !dynamicShadowMap) {
+                continue;
+            }
+            VkExtent2D extent = { static_cast<uint32_t>(shadowMap->width), static_cast<uint32_t>(shadowMap->height) };
+
+            light->transitionShadowMapLayout(commandBuffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, shadowMap);
+            light->transitionShadowMapLayout(commandBuffer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, dynamicShadowMap, true);
+
+            for (int face = 0; face < 6; ++face) {
+                VkImageCopy copyRegion = light->getShadowImageCopyRegion(face);
+                vkCmdCopyImage(commandBuffer,
+                    shadowMap->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    dynamicShadowMap->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &copyRegion
+                );
+            }
+
+            light->transitionShadowMapLayout(commandBuffer, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, shadowMap);
+            light->transitionShadowMapLayout(commandBuffer, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, dynamicShadowMap, true);
+
+            for (int face = 0; face < 6; ++face) {
+                VkFramebuffer framebuffer = light->getDynamicShadowFrameBuffer(face);
+                if (framebuffer == VK_NULL_HANDLE) {
+                    continue;
+                }
+
+                VkRenderPassBeginInfo renderPassInfo = light->getShadowRenderPassBeginInfoLoad(framebuffer, extent, face);
+                vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+                glm::mat4 lightView = views[face];
+                glm::mat4 lightViewProj = shadowProj * lightView;
+                light->setShadowViewProjection(face, lightViewProj);
+                glm::vec4 lightPosFar = glm::vec4(pos, farPlane);
+                for (Entity* entity : movableEntities) {
+                    traverse(traverse, entity, lightViewProj, lightPosFar, extent);
+                }
+
+                vkCmdEndRenderPass(commandBuffer);
+            }
+            light->transitionShadowMapLayout(commandBuffer, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, dynamicShadowMap, true);
         }
     }
     void Renderer::renderEntitiesGeometry(VkCommandBuffer commandBuffer) {
@@ -2702,6 +2873,7 @@ void Renderer::createInstance() {
         }
         std::vector<Light*> lights = entityManager->getDirtyLights();
         renderEntitiesShadowDepth(commandBuffer, lights);
+        renderEntitiesMovableShadowDepth(commandBuffer);
         {
             VkClearValue clearValues[4];
             clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};  // Albedo
@@ -2738,7 +2910,7 @@ void Renderer::createInstance() {
             };
             
             vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-            updateLightsUniformBuffer(lights);
+            updateLightsUniformBuffer();
             renderDeferredLighting(commandBuffer);
             vkCmdEndRenderPass(commandBuffer);
         }

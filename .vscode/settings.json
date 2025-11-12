@@ -122,6 +122,7 @@
         "any": "cpp",
         "expected": "cpp",
         "filesystem": "cpp",
-        "numbers": "cpp"
+        "numbers": "cpp",
+        "ranges": "cpp"
     }
 }

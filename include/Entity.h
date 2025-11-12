@@ -48,6 +48,8 @@ public:
     std::vector<Entity*>& getChildren() { return children; }
     Entity* getChild(const std::string& name);
     Entity* getParent() const { return parent; }
+    bool isMovable() const { return movable; }
+    void setMovable(bool state) { movable = state; }
 
     glm::vec3 getWorldPosition();
     glm::vec3 getWorldRotation();
@@ -81,6 +83,7 @@ private:
     Entity* parent = nullptr;
     Model* model = nullptr;
     bool active = true;
+    bool movable = false;
 
     void ensureUniformBuffers(Renderer* renderer, int vertexBindings);
 

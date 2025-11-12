@@ -15,14 +15,10 @@ public:
 
     std::map<std::string, Entity*>& getAllEntities() { return entities; }
 
-    void addEntity(const std::string& name, Entity* entity) {
-        entities[name] = entity;
-        if (!entity->getParent()) {
-            rootEntities.push_back(entity);
-        }
-    }
+    void addEntity(const std::string& name, Entity* entity);
 
     std::vector<Entity*>& getRootEntities() { return rootEntities; }
+    std::vector<Entity*>& getMovableEntities() { return movableEntities; }
 
     Entity* getEntity(const std::string& name) {
         if (entities.find(name) != entities.end()) {
@@ -31,41 +27,25 @@ public:
         return nullptr;
     }
 
-    void removeEntity(const std::string& name) {
-        if (entities.find(name) == entities.end()) return;
-        Entity* entity = entities[name];
-        if (!entity->getParent()) {
-            rootEntities.erase(std::remove(rootEntities.begin(), rootEntities.end(), entity), rootEntities.end());
-        }
-        delete entity;
-        entities.erase(name);
-    }
+    void removeEntity(const std::string& name);
 
-    void updateAll(float deltaTime) {
-        for (auto& pair : entities) {
-            pair.second->update(deltaTime);
-        }
-    }
+    void updateAll(float deltaTime);
 
-    void shutdown() {
-        for (auto& [name, entity] : entities) {
-            delete entity;
-        }
-        entities.clear();
-    }
+    void shutdown();
 
     static EntityManager* getInstance() {
         static EntityManager instance;
         return &instance;
     }
 
-    std::vector<Light*> getDirtyLights() {
-        std::vector<Light*> dirty;
-        for (auto& light : dirtyLights) {
-            dirty.push_back(light);
-        }
-        dirtyLights.clear();
-        return dirty;
+    std::vector<Light*> getDirtyLights();
+    std::vector<Light*>& getAllLights() { return allLights; }
+
+    void registerMovableEntity(Entity* entity) {
+        movableEntities.push_back(entity);
+    }
+    void unregisterMovableEntity(Entity* entity) {
+        movableEntities.erase(std::remove(movableEntities.begin(), movableEntities.end(), entity), movableEntities.end());
     }
 
     void markLightDirty(Light* light) {
@@ -75,5 +55,7 @@ public:
 private:
     std::map<std::string, Entity*> entities;
     std::vector<Entity*> rootEntities;
+    std::vector<Entity*> movableEntities;
     std::vector<Light*> dirtyLights;
+    std::vector<Light*> allLights;
 };

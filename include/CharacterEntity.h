@@ -17,7 +17,9 @@ public:
         const std::string& shader,
         const glm::vec3& position = {0.0f, 0.0f, 0.0f},
         const glm::vec3& rotation = {0.0f, 0.0f, 0.0f}
-    ) : Entity(name, shader, position, rotation) {}
+    ) : Entity(name, shader, position, rotation) {
+        this->setMovable(true);
+    }
     void update(float deltaTime) override;
     void move(const glm::vec3& delta);
     void stopMove(const glm::vec3& delta);

@@ -1,4 +1,5 @@
 #include <Entity.h>
+#include <EntityManager.h>
 #include <Model.h>
 
 AABB Entity::getWorldBounds(const glm::mat4& worldTransform) const {

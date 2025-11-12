@@ -73,6 +73,7 @@ public:
     VkRenderPass getLightingRenderPass() const { return lightingRenderPass; }
     VkRenderPass getCompositeRenderPass() const { return compositeRenderPass; }
     VkRenderPass getShadowMapRenderPass() const { return shadowRenderPass; }
+    VkRenderPass getShadowMapRenderPassLoad() const { return shadowRenderPassLoad; }
     ShaderManager* getShaderManager() const;
     uint32_t getFramesInFlight() const { return kMaxFramesInFlight; }
     bool isCursorLocked() const { return cursorLocked; }
@@ -102,12 +103,13 @@ private:
     void createLightingRenderPass();
     void createLightingFramebuffers();
     void createShadowRenderPass();
+    void createShadowRenderPassLoad();
     void createSSRResources();
     void createCompositeRenderPass();
     void createCompositeFramebuffers();
     void createDeferredDescriptorSets();
     void recreateDeferredDescriptorSets();
-    void updateLightsUniformBuffer(const std::vector<Light*>& dirtyLights);
+    void updateLightsUniformBuffer();
     VkFormat findDepthFormat();
     VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
     void createCommandPool();
@@ -117,6 +119,7 @@ private:
     void updateEntities();
     void renderEntitiesGeometry(VkCommandBuffer commandBuffer);
     void renderEntitiesShadowDepth(VkCommandBuffer commandBuffer, const std::vector<Light*>& lights);
+    void renderEntitiesMovableShadowDepth(VkCommandBuffer commandBuffer);
     void transitionGBufferForReading(VkCommandBuffer commandBuffer);
     void renderDeferredLighting(VkCommandBuffer commandBuffer);
     void renderComposite(VkCommandBuffer commandBuffer);
@@ -186,6 +189,7 @@ private:
     VkRenderPass lightingRenderPass{};
     VkRenderPass compositeRenderPass{};
     VkRenderPass shadowRenderPass{};
+    VkRenderPass shadowRenderPassLoad{};
     VkFormat swapChainImageFormat{};
     VkExtent2D swapChainExtent{};
     VkPipelineLayout pipelineLayout{};
