@@ -41,7 +41,7 @@ void UIObject::loadTexture() {
             std::cerr << "Texture " << texture << " not found!" << std::endl;
         } else {
             Renderer* renderer = Renderer::getInstance();
-            Shader* uiShader = renderer->getShaderManager()->getShader("ui");
+            Shader* uiShader = ShaderManager::getInstance()->getShader("ui");
             std::vector<Image*> textures = {img};
             std::vector<VkBuffer> buffers;
             descriptorSets = renderer->createDescriptorSets(

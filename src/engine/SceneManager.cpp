@@ -33,5 +33,5 @@ void SceneManager::switchScene(int id) {
 
 SceneManager* SceneManager::getInstance() {
     static SceneManager instance;
-    return &instance; 
+    return &instance;
 }

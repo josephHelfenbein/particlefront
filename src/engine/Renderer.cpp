@@ -164,7 +164,6 @@ struct TextVertex{
         mainLoop();
         cleanup();
     }
-    ShaderManager* Renderer::getShaderManager() const { return shaderManager; }
     VkCommandBuffer Renderer::beginSingleTimeCommands() {
         VkCommandBufferAllocateInfo allocInfo = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -1757,7 +1756,7 @@ void Renderer::createInstance() {
         {
             std::array<PointLight, kMaxPointLights> collectedLights{};
             uint32_t lightCount = 0;
-            auto traverse = [&](auto&& self, Entity* entity) -> void {
+            std::function<void(Entity*)> traverse = [&](Entity* entity) -> void {
                 if (entity->isActive()) {
                     if (auto* light = dynamic_cast<Light*>(entity)) {
                         if (lightCount < kMaxPointLights) {
@@ -1766,12 +1765,12 @@ void Renderer::createInstance() {
                     }
                 }
                 for (Entity* child : entity->getChildren()) {
-                    self(self, child);
+                    traverse(child);
                 }
             };
             for (auto& [name, entity] : entityManager->getAllEntities()) {
                 if (entity->isActive() && entity->getParent() == nullptr) {
-                    traverse(traverse, entity);
+                    traverse(entity);
                 }
             }
             if (lightCount > 0) {
@@ -2060,7 +2059,7 @@ void Renderer::createInstance() {
 
         uint32_t lightCount = 0;
         uint32_t shadowSlot = 0;
-        auto processLight = [&](Light* light) {
+        std::function<void(Light*)> processLight = [&](Light* light) {
             if (!light || !light->isActive()) {
                 return;
             }
@@ -2087,19 +2086,19 @@ void Renderer::createInstance() {
         };
 
         std::vector<Entity*>& rootEntities = entityManager->getRootEntities();
-        auto traverse = [&](auto&& self, Entity* entity) -> void {
+        std::function<void(Entity*)> traverse = [&](Entity* entity) -> void {
             if (entity->isActive()) {
                 if (auto* light = dynamic_cast<Light*>(entity)) {
                     processLight(light);
                 }
             }
             for (Entity* child : entity->getChildren()) {
-                self(self, child);
+                traverse(child);
             }
         };
         for (Entity* entity : rootEntities) {
             if (entity->isActive() && entity->getParent() == nullptr) {
-                traverse(traverse, entity);
+                traverse(entity);
             }
         }
 
@@ -2231,16 +2230,16 @@ void Renderer::createInstance() {
     }
     void Renderer::updateEntities() {
         auto& entities = entityManager->getAllEntities();
-        auto traverse = [&](auto&& self, Entity* entity) -> void {
+        std::function<void(Entity*)> traverse = [&](Entity* entity) -> void {
             entity->updateWorldTransform();
             entity->update(deltaTime);
             for (Entity* child : entity->getChildren()) {
-                self(self, child);
+                traverse(child);
             }
         };
         for (auto& [name, entity] : entities) {
             if (entity->getParent() == nullptr) {
-                traverse(traverse, entity);
+                traverse(entity);
             }
         }
     }
@@ -2256,7 +2255,7 @@ void Renderer::createInstance() {
             return;
         }
 
-        auto renderEntity = [&](Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> bool {
+        std::function<bool(Entity*, const glm::mat4&, const glm::vec4&, VkExtent2D)> renderEntity = [&](Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> bool {
             if (!entity->isActive() || entity->isMovable()) {
                 return false;
             }
@@ -2302,12 +2301,12 @@ void Renderer::createInstance() {
             }
             return true;
         };
-        auto traverse = [&](auto&& self, Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> void {
+        std::function<void(Entity*, const glm::mat4&, const glm::vec4&, VkExtent2D)> traverse = [&](Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> void {
             if (!renderEntity(entity, lightViewProj, lightPosFar, extent)) {
                 return;
             }
             for (Entity* child : entity->getChildren()) {
-                self(self, child, lightViewProj, lightPosFar, extent);
+                traverse(child, lightViewProj, lightPosFar, extent);
             }
         };
         for (Light* light : lights) {
@@ -2348,7 +2347,7 @@ void Renderer::createInstance() {
                 light->setShadowViewProjection(face, lightViewProj);
                 glm::vec4 lightPosFar = glm::vec4(pos, farPlane);
                 for (Entity* root : rootEntities) {
-                    traverse(traverse, root, lightViewProj, lightPosFar, extent);
+                    traverse(root, lightViewProj, lightPosFar, extent);
                 }
 
                 vkCmdEndRenderPass(commandBuffer);
@@ -2367,7 +2366,7 @@ void Renderer::createInstance() {
 
         std::vector<Entity*> movableEntities = entityManager->getMovableEntities();
 
-        auto renderEntity = [&](Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> bool {
+        std::function<bool(Entity*, const glm::mat4&, const glm::vec4&, VkExtent2D)> renderEntity = [&](Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> bool {
             if (!entity->isActive()) {
                 return false;
             }
@@ -2413,12 +2412,12 @@ void Renderer::createInstance() {
             }
             return true;
         };
-        auto traverse = [&](auto&& self, Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> void {
+        std::function<void(Entity*, const glm::mat4&, const glm::vec4&, VkExtent2D)> traverse = [&](Entity* entity, const glm::mat4& lightViewProj, const glm::vec4& lightPosFar, VkExtent2D extent) -> void {
             if (!renderEntity(entity, lightViewProj, lightPosFar, extent)) {
                 return;
             }
             for (Entity* child : entity->getChildren()) {
-                self(self, child, lightViewProj, lightPosFar, extent);
+                traverse(child, lightViewProj, lightPosFar, extent);
             }
         };
         for (Light* light : lights) {
@@ -2474,7 +2473,7 @@ void Renderer::createInstance() {
                 light->setShadowViewProjection(face, lightViewProj);
                 glm::vec4 lightPosFar = glm::vec4(pos, farPlane);
                 for (Entity* entity : movableEntities) {
-                    traverse(traverse, entity, lightViewProj, lightPosFar, extent);
+                    traverse(entity, lightViewProj, lightPosFar, extent);
                 }
 
                 vkCmdEndRenderPass(commandBuffer);
@@ -2499,7 +2498,7 @@ void Renderer::createInstance() {
             frustrum = activeCamera->getFrustrum(aspectRatio, 0.1f, 200.0f, cameraWorld);
             view = glm::inverse(cameraWorld);
         }
-        auto renderEntity = [&](Entity* entity) -> bool {
+        std::function<bool(Entity*)> renderEntity = [&](Entity* entity) -> bool {
             if (!entity->isActive()) {
                 return false;
             }
@@ -2561,18 +2560,18 @@ void Renderer::createInstance() {
         };
         
         if (rootEntities.empty()) return;
-        
-        auto traverse = [&](auto&& self, Entity* entity) -> void {
+
+        std::function<void(Entity*)> traverse = [&](Entity* entity) -> void {
             if (!renderEntity(entity)) {
                 return;
             }
             for (Entity* child : entity->getChildren()) {
-                self(self, child);
+                traverse(child);
             }
         };
         
         for (Entity* entity : rootEntities) {
-            traverse(traverse, entity);
+            traverse(entity);
         }
     }
     void Renderer::transitionGBufferForReading(VkCommandBuffer commandBuffer) {
@@ -2699,7 +2698,7 @@ void Renderer::createInstance() {
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
     }
     void Renderer::renderUI(VkCommandBuffer commandBuffer){
-        Shader* uiShader = getShaderManager()->getShader("ui");
+        Shader* uiShader = ShaderManager::getInstance()->getShader("ui");
         struct UIPushConstants {
             glm::vec3 color = glm::vec3(1.0f);
             uint32_t isUI = 1;
@@ -2724,7 +2723,7 @@ void Renderer::createInstance() {
         pixelToNdc[3][0] = -1.0f;
         pixelToNdc[3][1] = 1.0f;
 
-        auto drawUIObject = [&](UIObject* uiObj, const LayoutRect& rect) {
+        std::function<void(UIObject*, const LayoutRect&)> drawUIObject = [&](UIObject* uiObj, const LayoutRect& rect) {
             auto const& initialSets = uiObj->getDescriptorSets();
             const std::vector<VkDescriptorSet>* activeSets = &initialSets;
 
@@ -2747,7 +2746,7 @@ void Renderer::createInstance() {
             vkCmdDrawIndexed(commandBuffer, 6, 1, 0, 0, 0);
         };
 
-        auto drawTextObject = [&](TextObject* textObj, const LayoutRect& designRect, const LayoutRect& pixelRect) {
+        std::function<void(TextObject*, const LayoutRect&, const LayoutRect&)> drawTextObject = [&](TextObject* textObj, const LayoutRect& designRect, const LayoutRect& pixelRect) {
             if(!textObj || !textObj->isEnabled() || textObj->text.empty()) return;
             Font* font = fontManager->getFont(textObj->font);
             if (!font) return;
@@ -2834,7 +2833,7 @@ void Renderer::createInstance() {
             }
         };
 
-        auto traverse = [&](auto&& self, UIObject* node, const LayoutRect& parentDesignRect) -> void {
+        std::function<void(UIObject*, const LayoutRect&)> traverse = [&](UIObject* node, const LayoutRect& parentDesignRect) -> void {
             if (!node || !node->isEnabled()) return;
 
             if (auto* textNode = dynamic_cast<TextObject*>(node)) {
@@ -2849,7 +2848,7 @@ void Renderer::createInstance() {
             drawUIObject(node, pixelRect);
             for (auto& childEntry : node->children) {
                 if (UIObject* child = childEntry.second) {
-                    self(self, child, designRect);
+                    traverse(child, designRect);
                 }
             }
         };
@@ -2857,7 +2856,7 @@ void Renderer::createInstance() {
         LayoutRect rootDesignRect{glm::vec2(0.0f), designResolution};
         for (auto& [name, obj] : uiManager->getUIObjects()) {
             if (obj->getParent() == nullptr) {
-                traverse(traverse, obj, rootDesignRect);
+                traverse(obj, rootDesignRect);
             }
         }
     }
@@ -3268,7 +3267,7 @@ void Renderer::createInstance() {
         mousePosF.y = swapExtentF.y - mousePosF.y;
 
         bool foundHover = false;
-        auto traverse = [&](auto&& self, UIObject* node, const LayoutRect& parentDesignRect) -> void {
+        std::function<void(UIObject*, const LayoutRect&)> traverse = [&](UIObject* node, const LayoutRect& parentDesignRect) -> void {
             if (!node || !node->isEnabled()) return;
 
             if (auto* textNode = dynamic_cast<TextObject*>(node)) {
@@ -3292,14 +3291,14 @@ void Renderer::createInstance() {
 
             for (auto& childEntry : node->children) {
                 if (UIObject* child = childEntry.second) {
-                    self(self, child, designRect);
+                    traverse(child, designRect);
                 }
             }
         };
         LayoutRect rootDesignRect{glm::vec2(0.0f), designResolution};
         for (auto& [name, obj] : app->uiManager->getUIObjects()) {
             if (obj->getParent() == nullptr) {
-                traverse(traverse, obj, rootDesignRect);
+                traverse(obj, rootDesignRect);
             }
         }
         if (!foundHover) {

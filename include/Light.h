@@ -2,6 +2,7 @@
 #include <Entity.h>
 #include <glm/glm.hpp>
 #include <ShaderManager.h>
+#include <functional>
 #include <TextureManager.h>
 #include <EntityManager.h>
 #include <string>
@@ -75,7 +76,7 @@ public:
         std::array<VkImageView, 6> tempFaceViews{};
         tempFaceViews.fill(VK_NULL_HANDLE);
 
-        auto cleanupOnFailure = [&](uint32_t createdFaceCount) {
+        std::function<void(uint32_t)> cleanupOnFailure = [&](uint32_t createdFaceCount) {
             for (uint32_t j = 0; j < createdFaceCount; ++j) {
                 if (tempFaceViews[j] != VK_NULL_HANDLE) {
                     vkDestroyImageView(deviceHandle, tempFaceViews[j], nullptr);
@@ -245,7 +246,7 @@ public:
         std::array<VkImageView, 6> tempFaceViews{};
         tempFaceViews.fill(VK_NULL_HANDLE);
 
-        auto cleanupOnFailure = [&](uint32_t createdFaceCount) {
+        std::function<void(uint32_t)> cleanupOnFailure = [&](uint32_t createdFaceCount) {
             for (uint32_t j = 0; j < createdFaceCount; ++j) {
                 if (tempFaceViews[j] != VK_NULL_HANDLE) {
                     vkDestroyImageView(deviceHandle, tempFaceViews[j], nullptr);

@@ -56,7 +56,7 @@ void FontManager::loadFont(const std::string& fontPath, const std::string& fontN
             renderer->createTextureImage(1, 1, &dummyPixel, character.texture.image, character.texture.imageMemory, VK_FORMAT_R8_UNORM);
         } else renderer->createTextureImage(face->glyph->bitmap.width, face->glyph->bitmap.rows, face->glyph->bitmap.buffer, character.texture.image, character.texture.imageMemory, VK_FORMAT_R8_UNORM);
         renderer->createTextureImageView(VK_FORMAT_R8_UNORM, character.texture.image, character.texture.imageView);
-        Shader* uiShader = renderer->getShaderManager()->getShader("ui");
+        Shader* uiShader = ShaderManager::getInstance()->getShader("ui");
         Image* imgPtr = &character.texture;
         std::vector<Image*> textures = {imgPtr};
         std::vector<VkBuffer> uniformBuffers;

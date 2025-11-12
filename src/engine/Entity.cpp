@@ -1,6 +1,7 @@
 #include <Entity.h>
 #include <EntityManager.h>
 #include <Model.h>
+#include <ShaderManager.h>
 
 AABB Entity::getWorldBounds(const glm::mat4& worldTransform) const {
     Model* model = getModel();
@@ -116,7 +117,7 @@ void Entity::loadTextures() {
     }
     TextureManager* texMgr = TextureManager::getInstance();
     Renderer* renderer = Renderer::getInstance();
-    ShaderManager* shaderMgr = renderer ? renderer->getShaderManager() : nullptr;
+    ShaderManager* shaderMgr = ShaderManager::getInstance();
     Shader* shaderUsed = shaderMgr ? shaderMgr->getShader(shader) : nullptr;
     if (!shaderUsed) {
         std::cerr << "Shader " << shader << " not found!" << std::endl;

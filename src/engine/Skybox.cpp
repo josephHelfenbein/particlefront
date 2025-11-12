@@ -1,4 +1,5 @@
 #include <Skybox.h>
+#include <functional>
 
 void Skybox::update(float deltaTime) {
     if (camera) {
@@ -63,7 +64,7 @@ bool Skybox::createCubemapTexture() {
     const VkDeviceSize faceStrideBytes = facePixelCount * 4 * sizeof(float);
     std::vector<float> cubemapData(static_cast<size_t>(facePixelCount) * 4u * 6u, 0.0f);
 
-    auto sampleTexel = [&](float u, float v) -> glm::vec3 {
+    std::function<glm::vec3(float, float)> sampleTexel = [&](float u, float v) -> glm::vec3 {
         u = std::clamp(u, 0.0f, 1.0f);
         v = std::clamp(v, 0.0f, 1.0f);
         const float x = u * static_cast<float>(width - 1);
@@ -74,7 +75,7 @@ bool Skybox::createCubemapTexture() {
         const int y1 = std::min(y0 + 1, height - 1);
         const float tx = x - static_cast<float>(x0);
         const float ty = y - static_cast<float>(y0);
-        auto fetch = [&](int px, int py) -> glm::vec3 {
+        std::function<glm::vec3(int, int)> fetch = [&](int px, int py) -> glm::vec3 {
             const size_t index = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px);
             if (isHDR) {
                 const float* data = hdrPixels + index * desiredChannels;

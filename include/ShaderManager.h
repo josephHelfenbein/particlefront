@@ -23,6 +23,14 @@ struct Shader {
     int poolMultiplier = 1;
     int vertexBitBindings = 1;
     int fragmentBitBindings = 4;
+    bool enableDepth = true;
+    bool useTextVertex = false;
+    VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
+    bool depthWrite = true;
+    VkCompareOp depthCompare = VK_COMPARE_OP_LESS;
+    VkRenderPass renderPassToUse = VK_NULL_HANDLE;
+    uint32_t colorAttachmentCount = 1;
+    bool noVertexInput = false;
 };
 
 struct ComputeShader {
@@ -88,17 +96,17 @@ struct alignas(16) ShadowMapPushConstants {
 class ShaderManager {
 private:
     std::unordered_map<std::string, std::variant<Shader, ComputeShader>> shaders;
-    Renderer* renderer;
+    Renderer* renderer = nullptr;
 
 public:
-    ShaderManager(std::vector<std::variant<Shader*, ComputeShader*>>& shaders);
+    ShaderManager();
     ~ShaderManager();
 
     Shader* getShader(const std::string& name);
     ComputeShader* getComputeShader(const std::string& name);
 
-    void loadShader(const std::string& name, const std::string& vertexPath, const std::string& fragmentPath, int vertexBitBindings, int fragmentBitBindings, VkPushConstantRange pushConstantRange = {}, int poolMultiplier = 1);
-    void loadShader(const std::string& name, const std::string& computePath, int computeBitBindings, int storageImageCount, VkPushConstantRange pushConstantRange = {}, int poolMultiplier = 1);
+    void loadShader(Shader* shader);
+    void loadShader(ComputeShader* shader);
     void shutdown();
 
     static ShaderManager* getInstance();

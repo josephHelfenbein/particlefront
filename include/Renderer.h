@@ -4,6 +4,7 @@
 #include <vector>
 #include <array>
 #include <optional>
+#include <functional>
 #include <cstdint>
 
 struct GLFWwindow;
@@ -74,7 +75,6 @@ public:
     VkRenderPass getCompositeRenderPass() const { return compositeRenderPass; }
     VkRenderPass getShadowMapRenderPass() const { return shadowRenderPass; }
     VkRenderPass getShadowMapRenderPassLoad() const { return shadowRenderPassLoad; }
-    ShaderManager* getShaderManager() const;
     uint32_t getFramesInFlight() const { return kMaxFramesInFlight; }
     bool isCursorLocked() const { return cursorLocked; }
     bool isUIMode() const { return uiMode; }
